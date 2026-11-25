@@ -10,8 +10,6 @@ export default defineConfig([
     },
     rules: {
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
-      // chrome.* listeners return promises on purpose (sendResponse is used instead)
-      "@typescript-eslint/no-misused-promises": ["error", { checksVoidReturn: { arguments: false } }],
     },
   },
   {

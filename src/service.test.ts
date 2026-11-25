@@ -1,30 +1,56 @@
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { fromNpxCache, LABEL, launchAgent, startupScript, systemdUnit } from "./service.ts";
+import { fromNpxCache, LABEL, launchAgent, startupCommand, startupScript, systemdUnit } from "./service.ts";
 
-const spec = { command: ["/opt/node 22/bin/node", "/usr/lib/x/cli.js", "--config", "/home/a b/c&d.json"], log: "/home/a/log <1>.txt" };
+const spec = {
+  command: ["/opt/node 22/bin/node", "/usr/lib/x/cli.js", "--config", "/home/a b/c&d.json"],
+  path: "/opt/homebrew/bin:/usr/bin",
+  log: "/home/a/log <1>.txt",
+};
 
 describe("service files", () => {
-  it("macOS: a LaunchAgent with each argument as its own string, escaped", () => {
+  it("macOS: a LaunchAgent with each argument as its own string, the installer's PATH, escaped", () => {
     const f = launchAgent(spec, "/Users/u");
     assert.equal(f.path, `/Users/u/Library/LaunchAgents/${LABEL}.plist`);
     assert.match(f.content, /<string>\/opt\/node 22\/bin\/node<\/string>\n {4}<string>\/usr\/lib\/x\/cli\.js<\/string>/);
     assert.match(f.content, /<string>\/home\/a b\/c&amp;d\.json<\/string>/);
+    assert.match(f.content, /<key>PATH<\/key>\n {4}<string>\/opt\/homebrew\/bin:\/usr\/bin<\/string>/);
     assert.match(f.content, /<key>StandardOutPath<\/key>\n {2}<string>\/home\/a\/log &lt;1&gt;\.txt<\/string>/);
     assert.match(f.content, /<key>RunAtLoad<\/key>\n {2}<true\/>/);
   });
 
-  it("Linux: a systemd user unit with quoted arguments", () => {
-    const f = systemdUnit({ ...spec, command: [...spec.command, '50%"x\\y'] }, "/home/u");
+  it("Linux: a systemd user unit with quoted and escaped arguments and PATH", () => {
+    const f = systemdUnit({ ...spec, command: [...spec.command, '50%"x\\y$HOME'] }, "/home/u");
     assert.ok(f.path.endsWith("/systemd/user/gemini-mcp-bridge-server.service"));
-    assert.match(f.content, /^ExecStart="\/opt\/node 22\/bin\/node" "\/usr\/lib\/x\/cli\.js" "--config" "\/home\/a b\/c&d\.json" "50%%\\"x\\\\y"$/m);
+    assert.match(f.content, /^ExecStart="\/opt\/node 22\/bin\/node" "\/usr\/lib\/x\/cli\.js" "--config" "\/home\/a b\/c&d\.json" "50%%\\"x\\\\y\$\$HOME"$/m);
+    assert.match(f.content, /^Environment="PATH=\/opt\/homebrew\/bin:\/usr\/bin"$/m);
     assert.match(f.content, /WantedBy=default\.target/);
   });
 
-  it("Windows: a hidden script in the Startup folder", () => {
-    const f = startupScript({ command: ["C:\\Program Files\\nodejs\\node.exe", "C:\\x\\cli.js"], log: "C:\\l\\server.log" }, "C:\\Users\\u\\AppData\\Roaming");
-    assert.match(f.path, /Start Menu[\\/]Programs[\\/]Startup[\\/]gemini-mcp-bridge-server\.vbs$/);
-    assert.ok(f.content.includes('.Run "cmd /c ""C:\\Program Files\\nodejs\\node.exe"" ""C:\\x\\cli.js"" >> ""C:\\l\\server.log"" 2>&1", 0, False'), f.content);
+  it("Windows: a hidden script in the Startup folder, whose line keeps its quotes", () => {
+    const win = { command: ["C:\\Program Files\\nodejs\\node.exe", "C:\\x\\cli.js"], path: "", log: "C:\\l\\server.log" };
+    assert.equal(startupCommand(win), 'cmd /d /s /c ""C:\\Program Files\\nodejs\\node.exe" "C:\\x\\cli.js" >> "C:\\l\\server.log" 2>&1"');
+    const f = startupScript(win, "C:\\Users\\u\\AppData\\Roaming");
+    assert.equal(f.path, "C:\\Users\\u\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\gemini-mcp-bridge-server.vbs");
+    assert.ok(f.content.includes('.Run "cmd /d /s /c """"C:\\Program Files\\nodejs\\node.exe"" ""C:\\x\\cli.js"" >> ""C:\\l\\server.log"" 2>&1""", 0, False'), f.content);
+  });
+
+  it("Windows: the line really starts the program and fills the log", { skip: process.platform !== "win32" && "runs cmd.exe" }, () => {
+    const d = mkdtempSync(join(tmpdir(), "gmbs svc "));
+    try {
+      mkdirSync(join(d, "a b"));
+      const script = join(d, "a b", "s.js");
+      writeFileSync(script, "console.log('started')");
+      const log = join(d, "a b", "log.txt");
+      execSync(startupCommand({ command: [process.execPath, script], path: "", log }));
+      assert.match(readFileSync(log, "utf8"), /started/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 
   it("knows the npx cache", () => {

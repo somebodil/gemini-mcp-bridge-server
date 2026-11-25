@@ -19,19 +19,18 @@ const BODY_LIMIT = 8 * 1024 * 1024;
 export interface ListenOptions {
   port: number;
   token: string;
-  host?: string;
   log?: (line: string) => void;
 }
 
-export function mcpServerFor(hub: Hub): Server {
+function mcpServerFor(hub: Hub): Server {
   const server = new Server({ name: "gemini-mcp-bridge-server", version: VERSION }, { capabilities: { tools: {} }, instructions: hub.instructions() });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await hub.listTools() }));
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: hub.listTools() }));
   // the signal fires when the extension gives up or closes the connection: a running command is stopped
   server.setRequestHandler(CallToolRequestSchema, async (req, extra) => hub.callTool(req.params.name, req.params.arguments ?? {}, extra.signal));
   return server;
 }
 
-export function checkRequest(req: IncomingMessage, token: string): { status: number; message: string } | null {
+function checkRequest(req: IncomingMessage, token: string): { status: number; message: string } | null {
   const host = (req.headers.host ?? "").toLowerCase();
   if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host)) return { status: 403, message: "Host not allowed" };
   const origin = req.headers.origin;
@@ -45,17 +44,6 @@ export function checkRequest(req: IncomingMessage, token: string): { status: num
 
 function reply(res: ServerResponse, status: number, message: string): void {
   res.writeHead(status, { "content-type": "text/plain; charset=utf-8" }).end(message);
-}
-
-async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const c of req) {
-    size += (c as Buffer).length;
-    if (size > BODY_LIMIT) throw new Error("Request too large");
-    chunks.push(c as Buffer);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
 export function listen(hub: Hub, opts: ListenOptions): Promise<HttpServer> {
@@ -76,21 +64,14 @@ export function listen(hub: Hub, opts: ListenOptions): Promise<HttpServer> {
         res.setHeader("allow", "POST");
         return reply(res, 405, "Only POST: this server keeps no sessions");
       }
-      let body: unknown;
-      try {
-        body = await readBody(req);
-      } catch (e) {
-        return reply(res, 400, e instanceof Error ? e.message : "Bad request");
-      }
+      // the transport reads the body: 413 when it is too large, a JSON-RPC parse error when it is not JSON
       const server = mcpServerFor(hub);
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-      res.on("close", () => {
-        void transport.close();
-        void server.close();
-      });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true, maxRequestBodySize: BODY_LIMIT });
+      // closing the server closes the transport, which aborts a call still running
+      res.on("close", () => void server.close());
       try {
         await server.connect(transport);
-        await transport.handleRequest(req, res, body);
+        await transport.handleRequest(req, res);
       } catch (e) {
         log(`error: ${e instanceof Error ? e.message : String(e)}`);
         if (!res.headersSent) reply(res, 500, "Internal error");
@@ -99,7 +80,7 @@ export function listen(hub: Hub, opts: ListenOptions): Promise<HttpServer> {
   });
   return new Promise((resolve, reject) => {
     http.once("error", reject);
-    http.listen(opts.port, opts.host ?? "127.0.0.1", () => {
+    http.listen(opts.port, "127.0.0.1", () => {
       http.off("error", reject);
       resolve(http);
     });
