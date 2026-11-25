@@ -1,0 +1,51 @@
+{
+  "name": "gemini-mcp-bridge-server",
+  "version": "0.1.0",
+  "description": "Local MCP server for the Gemini MCP Bridge Chrome extension: your computer's shell and files, plus the MCP servers you list, on 127.0.0.1",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/somebodil/gemini-mcp-bridge-server.git"
+  },
+  "homepage": "https://github.com/somebodil/gemini-mcp-bridge-server#readme",
+  "bugs": {
+    "url": "https://github.com/somebodil/gemini-mcp-bridge-server/issues"
+  },
+  "bin": {
+    "gemini-mcp-bridge-server": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "gemini",
+    "chrome-extension"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "start": "node scripts/build.mjs && node dist/cli.js",
+    "prepack": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.73.0",
+    "zod": "4.6.7"
+  }
+}
