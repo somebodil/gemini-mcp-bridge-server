@@ -4,7 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 
 export const NAME = "gemini-mcp-bridge-server";
 export const LABEL = "io.github.somebodil.gemini-mcp-bridge-server";
@@ -25,7 +25,8 @@ const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 export function launchAgent(spec: ServiceSpec, home = homedir()): ServiceFile {
   const args = spec.command.map((a) => `    <string>${xml(a)}</string>`).join("\n");
   return {
-    path: join(home, "Library", "LaunchAgents", `${LABEL}.plist`),
+    // each file is for one system and keeps its path style, whatever system builds it (tests run on all three)
+    path: posix.join(home, "Library", "LaunchAgents", `${LABEL}.plist`),
     content: `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -58,7 +59,7 @@ const systemdArg = (a: string) => `"${a.replace(/\\/g, "\\\\").replace(/"/g, '\\
 
 export function systemdUnit(spec: ServiceSpec, home = homedir()): ServiceFile {
   return {
-    path: join(process.env.XDG_CONFIG_HOME || join(home, ".config"), "systemd", "user", `${NAME}.service`),
+    path: posix.join(process.env.XDG_CONFIG_HOME || posix.join(home, ".config"), "systemd", "user", `${NAME}.service`),
     content: `[Unit]
 Description=Local MCP server for the Gemini MCP Bridge Chrome extension
 
@@ -74,12 +75,12 @@ WantedBy=default.target
 }
 
 /** A VBScript in the Startup folder runs the server without a window and appends its output to the log. */
-export function startupScript(spec: ServiceSpec, appData = process.env.APPDATA ?? join(homedir(), "AppData", "Roaming")): ServiceFile {
+export function startupScript(spec: ServiceSpec, appData = process.env.APPDATA ?? win32.join(homedir(), "AppData", "Roaming")): ServiceFile {
   const cmdQuote = (a: string) => `"${a}"`;
   const line = `cmd /c ${spec.command.map(cmdQuote).join(" ")} >> ${cmdQuote(spec.log)} 2>&1`;
   // inside a VBScript string a quote is written twice
   return {
-    path: join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${NAME}.vbs`),
+    path: win32.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${NAME}.vbs`),
     content: `' Starts ${NAME} at logon, without a window. Remove this file to stop that.\r\nCreateObject("WScript.Shell").Run "${line.replace(/"/g, '""')}", 0, False\r\n`,
   };
 }
