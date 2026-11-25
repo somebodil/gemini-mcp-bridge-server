@@ -13,6 +13,9 @@ import { listen } from "./http.ts";
 import { Hub } from "./hub.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
+const WIN = process.platform === "win32";
+/** A command line that runs JavaScript with this node, the same under sh and cmd.exe (no " $ ` > in `js`). */
+const node = (js: string) => `"${process.execPath}" -e "${js}"`;
 const dir = mkdtempSync(join(tmpdir(), "gmbs-test-"));
 let http: HttpServer;
 let hub: Hub;
@@ -96,8 +99,9 @@ describe("tools", () => {
   });
 
   it("runs commands, with exit code and time limit", async () => {
-    assert.equal((await call("run_command", { command: "echo out; echo err >&2; exit 3", cwd: dir })).text, "exit code: 3\n--- stdout ---\nout\n--- stderr ---\nerr");
-    const slow = await call("run_command", { command: "sleep 5", timeout_seconds: 1 });
+    const r = await call("run_command", { command: node("console.log('out');console.error('err');process.exit(3)"), cwd: dir });
+    assert.equal(r.text, "exit code: 3\n--- stdout ---\nout\n--- stderr ---\nerr");
+    const slow = await call("run_command", { command: node("setTimeout(function(){},5000)"), timeout_seconds: 1 });
     assert.equal(slow.isError, true);
     assert.match(slow.text, /Stopped after 1 s/);
   });
@@ -115,13 +119,14 @@ describe("hard cases", () => {
 
   it("answers when the shell exits, even if it left something running", async () => {
     const started = Date.now();
-    const r = await call("run_command", { command: "sleep 30 & echo started", timeout_seconds: 5 });
-    assert.equal(r.text, "exit code: 0\n--- stdout ---\nstarted");
+    const bg = node("setTimeout(function(){},30000)");
+    const r = await call("run_command", { command: WIN ? `start /b "" ${bg} & echo started` : `${bg} & echo started`, timeout_seconds: 5 });
+    assert.match(r.text, /^exit code: 0\n--- stdout ---\nstarted\r?$/);
     assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
   });
 
   it("keeps multibyte output whole across pipe chunks", async () => {
-    const r = await call("run_command", { command: `node -e "process.stdout.write('한'.repeat(60000))"` });
+    const r = await call("run_command", { command: node("process.stdout.write('한'.repeat(60000))") });
     assert.ok(!r.text.includes("\uFFFD"));
     assert.equal((r.text.match(/한/g) ?? []).length, 60000);
   });
@@ -131,14 +136,13 @@ describe("hard cases", () => {
     const ctrl = new AbortController();
     setTimeout(() => ctrl.abort(), 300);
     const started = Date.now();
-    const r = await h.callTool("run_command", { command: "sleep 20" }, ctrl.signal);
+    const r = await h.callTool("run_command", { command: node("setTimeout(function(){},20000)") }, ctrl.signal);
     assert.equal(r.isError, true);
     assert.match(JSON.stringify(r.content), /cancelled/);
     assert.ok(Date.now() - started < 3000);
   });
 
-  it("refuses to read a FIFO", async () => {
-    if (process.platform === "win32") return;
+  it("refuses to read a FIFO", { skip: WIN && "no FIFOs on Windows" }, async () => {
     const fifo = join(dir, "fifo");
     const { execFileSync } = await import("node:child_process");
     execFileSync("mkfifo", [fifo]);

@@ -20,6 +20,21 @@ gemini-mcp-bridge-server 0.1.0
 
 Leave the window open while you use Gemini. Every call shows up there.
 
+## Start it when you log in
+
+Install it once, then let your system start it:
+
+```bash
+npm install -g gemini-mcp-bridge-server
+gemini-mcp-bridge-server install-service
+```
+
+It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Logs/gemini-mcp-bridge-server.log`), a systemd user service on Linux (log: `journalctl --user -u gemini-mcp-bridge-server`), a hidden script in the Startup folder on Windows (log: `%LOCALAPPDATA%\gemini-mcp-bridge-server\server.log`). No administrator rights are needed. `--port`, `--no-shell` and `--no-files` given here are saved in the config.
+
+- `gemini-mcp-bridge-server token` shows the URL and the token again (the service does not write the token into its log).
+- `gemini-mcp-bridge-server uninstall-service` stops it and removes it.
+- The service runs the Node.js that installed it: after removing that Node.js version (with nvm, say), run `install-service` again.
+
 ## Tools
 
 | Tool | What it does |
@@ -35,6 +50,7 @@ Paths may be absolute, start with `~`, or be relative to your home folder. The s
 
 ```
 gemini-mcp-bridge-server [--port <n>] [--config <file>] [--no-shell] [--no-files] [--new-token]
+gemini-mcp-bridge-server token | install-service | uninstall-service
 ```
 
 The config file is `~/.config/gemini-mcp-bridge-server/config.json` (on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`). Only your user can read it.
