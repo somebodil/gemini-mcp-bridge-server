@@ -1,8 +1,9 @@
-// The HTTP side: MCP over Streamable HTTP on 127.0.0.1 only, for requests that carry the token.
+// The HTTP side: MCP over Streamable HTTP, for requests that carry the token. The server listens on every
+// address of the computer, so that it is reached through a forwarded port too (a browser on the host of a
+// virtual machine, an SSH tunnel) and from another computer: where a request comes from is not looked at.
 //
-// Any web page in the browser can send requests to 127.0.0.1, so a request is refused unless
-//  - its Host is 127.0.0.1 or localhost (against DNS rebinding),
-//  - it has no Origin or a chrome-extension:// one (web pages always send theirs), and
+// Any web page in the browser can send requests to it, so a request is refused unless
+//  - it has no Origin or a chrome-extension:// one (web pages always send theirs, also after DNS rebinding), and
 //  - it carries `Authorization: Bearer <token>`.
 // Each request gets its own MCP server object (stateless mode): the extension's service worker may restart at
 // any time, and there is nothing to keep between requests.
@@ -31,8 +32,6 @@ function mcpServerFor(hub: Hub): Server {
 }
 
 function checkRequest(req: IncomingMessage, token: string): { status: number; message: string } | null {
-  const host = (req.headers.host ?? "").toLowerCase();
-  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host)) return { status: 403, message: "Host not allowed" };
   const origin = req.headers.origin;
   if (origin && !origin.startsWith("chrome-extension://")) return { status: 403, message: "Origin not allowed" };
   const auth = req.headers.authorization ?? "";
@@ -80,7 +79,7 @@ export function listen(hub: Hub, opts: ListenOptions): Promise<HttpServer> {
   });
   return new Promise((resolve, reject) => {
     http.once("error", reject);
-    http.listen(opts.port, "127.0.0.1", () => {
+    http.listen(opts.port, () => {
       http.off("error", reject);
       resolve(http);
     });

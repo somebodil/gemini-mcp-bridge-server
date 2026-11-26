@@ -1,7 +1,7 @@
 {
   "name": "gemini-mcp-bridge-server",
   "version": "0.2.0",
-  "description": "Local MCP server for the Gemini MCP Bridge Chrome extension: your computer's shell and files, plus the MCP servers you list, on 127.0.0.1",
+  "description": "Local MCP server for the Gemini MCP Bridge Chrome extension: your computer's shell and files, plus the MCP servers you list",
   "type": "module",
   "license": "MIT",
   "repository": {

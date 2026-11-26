@@ -2,7 +2,7 @@
 
 The local MCP server for [Gemini MCP Bridge](https://github.com/somebodil/gemini-mcp-bridge), the Chrome extension that lets Gemini on the web ([gemini.google.com](https://gemini.google.com)) use the tools of your computer.
 
-The extension runs in Chrome and cannot touch your computer by itself. This server is the part that can: it runs commands, reads and writes files, and passes calls through to the other MCP servers you list. The extension reaches it at `http://127.0.0.1:7341/mcp`.
+The extension runs in Chrome and cannot touch your computer by itself. This server is the part that can: it runs commands, reads and writes files, and passes calls through to the other MCP servers you list. The extension reaches it at `http://127.0.0.1:7341/mcp`, or at the address of the computer the server runs on.
 
 ```bash
 npx gemini-mcp-bridge-server
@@ -73,11 +73,11 @@ The server writes this file only on the first start and with a new token; keys i
 
 ## Safety
 
-- The server listens on `127.0.0.1` only. Any web page in your browser can send requests to `127.0.0.1`, so the server refuses a request unless all three hold:
+- The server listens on every address of the computer, not on `127.0.0.1` alone: a browser elsewhere reaches it too (on the host of a virtual machine through a forwarded port, through an SSH tunnel, on another computer of your network). It does not look at where a request comes from. It refuses a request unless both hold:
   - It carries the token: `Authorization: Bearer <token>`.
   - It has no `Origin`, or a `chrome-extension://` one. Web pages always send their own `Origin`.
-  - Its `Host` is `127.0.0.1` or `localhost`, which defeats DNS rebinding.
 - Whoever has the token can run commands as you. Keep it like a password. `--new-token` replaces it.
+- The token is the only lock, and it travels unencrypted. On a network you do not trust (a café, a shared office), close the port to other computers with the firewall of your system, or send it through an SSH tunnel.
 - The extension asks before each call by default. What Gemini writes can come from a web page or a document it read ("prompt injection"): keep `run_command` and `write_file` on *Ask* in the extension unless you watch closely. `--no-shell` and `--no-files` turn the tools off on this side.
 
 ## Development

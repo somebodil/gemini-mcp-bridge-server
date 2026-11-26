@@ -280,13 +280,24 @@ describe("HTTP", () => {
     assert.equal((await post({ ...auth, origin: "null" })).status, 403);
   });
 
-  it("refuses a foreign Host (DNS rebinding)", async () => {
-    const status = await new Promise<number>((resolve) => {
-      const port = new URL(url).port;
-      const req = request({ host: "127.0.0.1", port, path: "/mcp", method: "POST", headers: { host: `evil.example:${port}`, ...auth } }, (res) => resolve(res.statusCode ?? 0));
-      req.end("{}");
-    });
-    assert.equal(status, 403);
+  it("takes a request whatever address it came to (a forwarded port, another computer), with the token only", async () => {
+    // every address of the computer, not the loopback one alone
+    assert.match((http.address() as AddressInfo).address, /^(::|0\.0\.0\.0)$/);
+    const port = new URL(url).port;
+    const to = (headers: Record<string, string>) =>
+      new Promise<number>((resolve) => {
+        const req = request(
+          { host: "127.0.0.1", port, path: "/mcp", method: "POST", headers: { host: `192.168.56.1:${port}`, "content-type": "application/json", accept: "application/json, text/event-stream", ...headers } },
+          (res) => {
+            res.resume();
+            resolve(res.statusCode ?? 0);
+          },
+        );
+        req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }));
+      });
+    assert.equal(await to(auth), 200);
+    assert.equal(await to({}), 401);
+    assert.equal(await to({ ...auth, origin: `http://192.168.56.1:${port}` }), 403);
   });
 
   it("answers bad bodies, other methods and paths", async () => {

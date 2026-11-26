@@ -19,7 +19,7 @@ Usage:
   ${NAME} uninstall-service             Stop doing that
 
 Options:
-  --port <n>       Port on 127.0.0.1 (default: from the config, 7341)
+  --port <n>       Port (default: from the config, 7341)
   --config <file>  Config file (default: ${defaultConfigPath()})
   --no-shell       Without the run_command tool
   --no-files       Without read_file, write_file, list_directory
@@ -119,6 +119,7 @@ async function main(): Promise<void> {
     ...hub.notRunning().map((s) => `  Not running yet: ${s.name}${s.error ? ` (${s.error})` : " (starting)"}`),
     "",
     "In Chrome: click the Gemini MCP Bridge icon > Settings, and enter the URL and the token.",
+    "From another computer, or through a forwarded port: the same URL with that address and port.",
     "Leave this window open while you use Gemini; Ctrl+C stops the server.",
     "",
   ];
