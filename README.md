@@ -11,7 +11,7 @@ npx gemini-mcp-bridge-server
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-gemini-mcp-bridge-server 0.3.0
+gemini-mcp-bridge-server 0.4.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
