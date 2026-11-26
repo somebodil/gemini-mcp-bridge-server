@@ -86,7 +86,11 @@ describe("tools", () => {
     if (WIN) assert.match(c.getInstructions() ?? "", /run_command uses /);
     else {
       // Gemini puts Python into "command" unless it is told plainly not to
-      assert.match(c.getInstructions() ?? "", /run_command runs its "command" with \S*bash -c, so "command" must be bash syntax only/);
+      assert.match(c.getInstructions() ?? "", /run_command runs its "command" with \S*bash -c \(bash \d+\.\d+\), so "command" must be bash syntax only/);
+      // told when it is the old bash of macOS, and only then
+      const major = Number(execFileSync("bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" }).trim());
+      if (major < 4) assert.match(c.getInstructions() ?? "", /This bash is older than 4: \$\{var\^\^\}/);
+      else assert.doesNotMatch(c.getInstructions() ?? "", /older than 4/);
       assert.match(c.getInstructions() ?? "", /Never put Python or the code of any other language into it\./);
       assert.match(c.getInstructions() ?? "", /save it to a file with write_file first, then run that file/);
       const run = (await c.listTools()).tools.find((t) => t.name === "run_command");
@@ -195,7 +199,8 @@ describe("tools", () => {
       ["echo {a,b}.txt", "a.txt b.txt"],
       ["cat <(echo hi)", "hi"],
       ["arr=(one two three); echo \"${arr[1]} ${#arr[@]}\"", "two 3"],
-      ["s=hello; echo ${s^^} ${s:1:3}", "HELLO ell"],
+      // bash 3.2 too (macOS): nothing that came with bash 4
+      ["s=hello; echo ${s/l/L} ${s:1:3}", "heLlo ell"],
       ["shopt -s extglob; echo ${BASH_VERSION%%.*} | grep -cE '^[0-9]+$'", "1"],
     ];
     for (const [command, out] of cases) {

@@ -1,6 +1,6 @@
 // The tools the server has by itself: a shell and the file system of this computer.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { arch, homedir, platform, release } from "node:os";
@@ -36,6 +36,16 @@ const SHELL = WIN ? process.env.ComSpec || "cmd.exe" : (findBash() ?? (process.e
 /** True when run_command runs bash: then Gemini is told to write bash syntax only. */
 export const RUNS_BASH = !WIN && /(^|\/)bash$/.test(SHELL);
 
+/** The version of that bash, as [major, minor] ([0, 0] when it does not say): macOS has bash 3.2. */
+function bashVersion(): [number, number] {
+  try {
+    const [major, minor] = execFileSync(SHELL, ["-c", 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'], { encoding: "utf8", timeout: 5000 }).trim().split(" ").map(Number);
+    return [major || 0, minor || 0];
+  } catch {
+    return [0, 0];
+  }
+}
+
 type Switches = { shell: boolean; files: boolean };
 
 /** What Gemini needs to know to write paths and commands: the kind of computer, the home folder, the shell. */
@@ -44,10 +54,13 @@ export function systemNote(tools: Switches): string {
   const lines = [`Computer: ${os} ${release()} (${arch()}).`, `Home folder: ${homedir()}.`];
   if (tools.files || tools.shell) lines[1] += " Relative paths in the tools start there; ~ works too.";
   if (tools.shell && RUNS_BASH) {
+    const [major, minor] = bashVersion();
     lines.push(
-      `run_command runs its "command" with ${SHELL} -c, so "command" must be bash syntax only: a command line as typed in a bash terminal. ` +
+      `run_command runs its "command" with ${SHELL} -c${major ? ` (bash ${major}.${minor})` : ""}, so "command" must be bash syntax only: a command line as typed in a bash terminal. ` +
         "Never put Python or the code of any other language into it.",
     );
+    // macOS keeps bash 3.2: what came with bash 4 fails there
+    if (major && major < 4) lines.push("This bash is older than 4: ${var^^} and ${var,,}, associative arrays (declare -A), mapfile, |& and ** do not work in it.");
     if (tools.files) lines.push("To run code in another language, save it to a file with write_file first, then run that file with run_command (for example: python3 /tmp/script.py).");
   } else if (tools.shell) lines.push(`run_command uses ${SHELL}.`);
   return lines.join("\n");
