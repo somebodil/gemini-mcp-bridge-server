@@ -100,7 +100,7 @@ export function loadConfig(path: string, opts: { newToken?: boolean } = {}): { c
   return { config, created, raw };
 }
 
-export function saveConfig(path: string, config: Config & Record<string, unknown>): void {
+function saveConfig(path: string, config: Config & Record<string, unknown>): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   if (process.platform !== "win32") chmodSync(path, 0o600);

@@ -679,7 +679,7 @@ describe("command line", () => {
 
   it("prints its version and help", async () => {
     assert.equal((await run(["--version"])).out.trim(), VERSION);
-    assert.match((await run(["--help"])).out, /Usage:[\s\S]*install-service/);
+    assert.match((await run(["--help"])).out, /Usage:[\s\S]*perf-log/);
   });
 
   it("shows the performance log, or how to fill it", async () => {

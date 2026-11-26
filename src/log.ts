@@ -1,5 +1,5 @@
-// The server's log, on stdout (a service's log file gets the same lines): each request as it comes, each step of
-// the work it asks for, and the reply as it goes out. A line has the time to the millisecond, a level, and the
+// The server's log, on stdout: each request as it comes, each step of the work it asks for, and the reply as it
+// goes out. A line has the time to the millisecond, a level, and the
 // number of its request (#12), which all lines of that request share. WARN and ERROR say that something went wrong,
 // at the moment it does.
 

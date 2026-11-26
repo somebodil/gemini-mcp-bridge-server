@@ -1,17 +1,14 @@
 // local-mcp-bridge-server: the local MCP server that the Gemini MCP Bridge extension talks to.
 
-import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stopAllCommands } from "./builtin.ts";
-import { defaultConfigPath, loadConfig, saveConfig, takeOverFormerConfig, validPort } from "./config.ts";
+import { defaultConfigPath, loadConfig, takeOverFormerConfig, validPort } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
 import { consoleLogger } from "./log.ts";
 import { FORMER_NAME, NAME } from "./name.ts";
 import { perfLogPath, showPerf } from "./perf.ts";
-import { formerService, fromNpxCache, install, logPath, uninstall } from "./service.ts";
 
 const HELP = `${NAME} ${VERSION}: your computer's tools for chats on the web, through the Gemini MCP Bridge extension
 
@@ -19,8 +16,6 @@ Usage:
   ${NAME} [options]                     Start the server
   ${NAME} token [--config <file>]       Show the URL and the token for the extension
   ${NAME} perf-log [--config <file>]    Show the extension's performance log (an option of the extension)
-  ${NAME} install-service [options]     Start the server whenever you log in (and now)
-  ${NAME} uninstall-service             Stop doing that
 
 Options:
   --port <n>       Port (default: from the config, 7341)
@@ -37,9 +32,8 @@ work, and the reply; WARN and ERROR lines when something goes wrong.
 The config file also lists MCP servers to pass through, in the usual "mcpServers" shape:
   "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp@latest"] } }
 
-Until 0.6.0 its name was ${FORMER_NAME}: without --config, the first start (or token, install-service) copies
-that name's config file (the token, the port, the servers), and install-service and uninstall-service remove that
-name's service.
+Until 0.6.0 its name was ${FORMER_NAME}: without --config, the first start (or token) copies that name's config
+file (the token, the port, the servers).
 `;
 
 function port(value: string | undefined, fallback: number): number {
@@ -66,34 +60,14 @@ async function main(): Promise<void> {
   const command = positionals[0] ?? "serve";
   if (values.help) return void process.stdout.write(HELP);
   if (values.version) return void process.stdout.write(`${VERSION}\n`);
-  // absolute: a service starts in another folder
   const path = values.config ? resolve(values.config) : defaultConfigPath();
   if (command === "perf-log") return void process.stdout.write(showPerf(perfLogPath(path)));
-  if (command === "uninstall-service") return void process.stdout.write(`${uninstall().join("\n")}\n`);
   // the first command that reads the default config takes over the file of the former name
   const copied = values.config ? undefined : takeOverFormerConfig(path);
 
   if (command === "token") {
     const { config } = loadConfig(path);
     return void process.stdout.write(`URL:   http://127.0.0.1:${config.port}/mcp\nToken: ${config.token}\n`);
-  }
-  if (command === "install-service") {
-    const script = realpathSync(fileURLToPath(import.meta.url));
-    if (fromNpxCache(script)) {
-      throw new Error(`npx runs ${NAME} from a cache that npm may clean. Install it first, then install the service:\n  npm install -g ${NAME}\n  ${NAME} install-service`);
-    }
-    // the port and the tools go into the config, so that `token` and a later manual start agree with the service
-    const { config, raw } = loadConfig(path, { newToken: values["new-token"] });
-    config.port = port(values.port, config.port);
-    if (values["no-shell"]) config.tools.shell = false;
-    if (values["no-files"]) config.tools.files = false;
-    saveConfig(path, { ...raw, ...config });
-    const lines = [
-      ...(copied ? [`Copied the config of ${FORMER_NAME}: ${copied} to ${path}`] : []),
-      ...install({ command: [process.execPath, script, "--config", path], path: process.env.PATH ?? "", log: logPath() }),
-    ];
-    process.stdout.write(`${lines.join("\n")}\n\nFor the extension's options:\n  URL:   http://127.0.0.1:${config.port}/mcp\n  Token: ${config.token}\n`);
-    return;
   }
   if (command !== "serve") throw new Error(`Unknown command: ${command}. See ${NAME} --help`);
 
@@ -111,14 +85,8 @@ async function main(): Promise<void> {
   const perfLog = perfLogPath(path);
   const http = await listen(hub, { port: listenPort, token: config.token, log, perfLog }).catch(async (e: NodeJS.ErrnoException) => {
     await hub.close();
-    if (e.code !== "EADDRINUSE") throw e;
-    const former = formerService();
-    throw new Error(
-      former
-        ? `Port ${listenPort} is in use, likely by the service of the former name, ${FORMER_NAME} (${former}). Remove it: ${NAME} uninstall-service. Or another port: --port <n>`
-        : `Port ${listenPort} is in use: is ${NAME} already running (perhaps as a service)? Another port: --port <n>`,
-      { cause: e },
-    );
+    if (e.code === "EADDRINUSE") throw new Error(`Port ${listenPort} is in use: is ${NAME} already running in another window? Another port: --port <n>`, { cause: e });
+    throw e;
   });
   let stopping = false;
   const stop = async () => {
@@ -136,9 +104,8 @@ async function main(): Promise<void> {
 
   await hub.start();
   const names = hub.listTools().map((t) => t.name);
-  // the token goes only to a terminal: as a service, the output ends in a log file
+  // the token goes only to a terminal, not into a file or a pipe the output is sent to
   const token = process.stdout.isTTY ? config.token : `(not printed here; run: ${NAME} token)`;
-  const former = formerService();
   const out = [
     `${NAME} ${VERSION}`,
     `  URL:    http://127.0.0.1:${listenPort}/mcp`,
@@ -147,7 +114,6 @@ async function main(): Promise<void> {
     `  Perf:   ${perfLog} (when the extension's performance log is on)`,
     `  Tools:  ${names.length ? names.join(", ") : "none"}`,
     ...hub.notRunning().map((s) => `  Not running yet: ${s.name}${s.error ? ` (${s.error})` : " (starting)"}`),
-    ...(former ? [`  The service of the former name, ${FORMER_NAME}, is still installed (${former}). Remove it: ${NAME} uninstall-service`] : []),
     "",
     "In Chrome: click the Gemini MCP Bridge icon > Settings, and enter the URL and the token.",
     "From another computer, or through a forwarded port: the same URL with that address and port.",

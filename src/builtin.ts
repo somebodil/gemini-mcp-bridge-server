@@ -20,7 +20,7 @@ const END_WORD = "GMB_EOF";
 /**
  * bash on the PATH, or in its usual places. Gemini is told to write bash, and a command a user copies from a
  * terminal is bash too: the user's $SHELL may be zsh (macOS), and /bin/sh may be dash (Debian), where $'...',
- * [[ ]], {a,b} and <(...) do not work. A service gets no $SHELL at all.
+ * [[ ]], {a,b} and <(...) do not work.
  */
 function findBash(): string | undefined {
   const dirs = [...(process.env.PATH ?? "").split(delimiter), "/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"];

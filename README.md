@@ -11,7 +11,7 @@ npx local-mcp-bridge-server
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-local-mcp-bridge-server 0.7.0
+local-mcp-bridge-server 0.8.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
@@ -21,35 +21,15 @@ local-mcp-bridge-server 0.7.0
 
 Leave the window open while you use the extension. Every request shows up there as it comes (see *Log* below).
 
-## Start it when you log in
-
-Install it once, then let your system start it:
-
-```bash
-npm install -g local-mcp-bridge-server
-local-mcp-bridge-server install-service
-```
-
-It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Logs/local-mcp-bridge-server.log`), a systemd user service on Linux (log: `journalctl --user -u local-mcp-bridge-server`), a hidden script in the Startup folder on Windows (log: `%LOCALAPPDATA%\local-mcp-bridge-server\server.log`). No administrator rights are needed. `--port`, `--no-shell` and `--no-files` given here are saved in the config.
-
-- `local-mcp-bridge-server token` shows the URL and the token again (the service does not write the token into its log).
-- `local-mcp-bridge-server perf-log` shows the extension's performance log (below).
-- `local-mcp-bridge-server uninstall-service` stops it and removes it.
-- The service runs the Node.js that installed it, with the `PATH` of the terminal you installed it from (so that `npx` and your tools are found): after removing that Node.js version (with nvm, say) or changing your `PATH`, run `install-service` again.
-
 ## From gemini-mcp-bridge-server
 
-Until 0.6.0 this server was called `gemini-mcp-bridge-server`. The new name takes over what the old one left, so the URL and the token in the extension stay as they are:
+Until 0.6.0 this server was called `gemini-mcp-bridge-server`. Without `--config`, the first start (or `token`) copies the old config file (`~/.config/gemini-mcp-bridge-server/config.json`, on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`) to the new place, with its token, port and servers: the URL and the token in the extension stay as they are.
 
-- **The config:** without `--config`, the first start (or `token`, `install-service`) copies the old config file (`~/.config/gemini-mcp-bridge-server/config.json`, on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`) to the new place, with its token, port and servers.
-- **The service:** `install-service` removes the service of the old name before it installs its own, and `uninstall-service` removes both. When the old service still holds the port, the message of a start that fails says so.
-
-If you had installed the old one:
+A service that an earlier version installed (`install-service`, until 0.7.0) starts that version at every login and holds the port. Remove it once:
 
 ```bash
-npm install -g local-mcp-bridge-server
-local-mcp-bridge-server install-service   # replaces the service of the old name
-npm uninstall -g gemini-mcp-bridge-server
+npx local-mcp-bridge-server@0.7.0 uninstall-service   # removes the service of either name
+npm uninstall -g gemini-mcp-bridge-server            # if you had installed it
 ```
 
 ## Tools
@@ -67,8 +47,10 @@ Paths may be absolute, start with `~`, or be relative to your home folder. The s
 
 ```
 local-mcp-bridge-server [--port <n>] [--config <file>] [--no-shell] [--no-files] [--new-token]
-local-mcp-bridge-server token | perf-log | install-service | uninstall-service
+local-mcp-bridge-server token | perf-log
 ```
+
+`token` shows the URL and the token again, `perf-log` the extension's performance log (below).
 
 The config file is `~/.config/local-mcp-bridge-server/config.json` (on Windows `%APPDATA%\local-mcp-bridge-server\config.json`). Only your user can read it.
 
@@ -90,7 +72,7 @@ The server writes this file only on the first start and with a new token; keys i
 
 ## Log
 
-While it runs, the server writes to stdout (the service: to its log, above) each request as it comes, each step of the work, and the reply as it goes out, all under the number of the request. Something going wrong is a `WARN` or `ERROR` line at once: a tool that failed (with why), wrong arguments, a body that is not JSON (HTTP 400), any reply with an error status (with what it said), a refused request, a file tool still running after 5 seconds, a call the extension gave up on, a reply that had nowhere to go.
+While it runs, the server writes to stdout each request as it comes, each step of the work, and the reply as it goes out, all under the number of the request. Something going wrong is a `WARN` or `ERROR` line at once: a tool that failed (with why), wrong arguments, a body that is not JSON (HTTP 400), any reply with an error status (with what it said), a refused request, a file tool still running after 5 seconds, a call the extension gave up on, a reply that had nowhere to go.
 
 ```
 14:33:50.923 INFO  #1 ← tools/call run_command {"command":"mkdir -p /tmp/job && cat > /tmp/job/main.py <<'GMB_EOF' && python3 /tmp/job/main.py\nprint(\"hello\")\nGMB_EOF"} · 215 bytes from 127.0.0.1
@@ -124,7 +106,7 @@ The lines say which clicks, keys and frames took long on the page and how much o
 
 ```bash
 npm install
-npm run check   # types, lint, tests (tools, HTTP checks, pass-through servers, config, command line, service files)
+npm run check   # types, lint, tests (tools, HTTP checks, pass-through servers, config, command line)
 npm run smoke   # build, then run dist/cli.js as users do: --version, token, start, tools/list
 npm start       # build and run dist/cli.js
 ```
