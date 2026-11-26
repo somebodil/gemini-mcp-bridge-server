@@ -43,5 +43,7 @@ const tools = (await rpc("tools/list")).tools.map((t) => t.name);
 server.kill("SIGTERM");
 rmSync(dir, { recursive: true, force: true });
 if (init?.serverInfo?.name !== "gemini-mcp-bridge-server") fail(`initialize answered ${JSON.stringify(init)}`);
-if (tools.join(",") !== "run_command,read_file,write_file,list_directory") fail(`tools/list answered ${tools.join(",")}`);
+// write_file only without bash (cmd.exe on Windows): elsewhere run_command writes files
+const expected = process.platform === "win32" ? "run_command,read_file,write_file,list_directory" : "run_command,read_file,list_directory";
+if (tools.join(",") !== expected) fail(`tools/list answered ${tools.join(",")}`);
 console.log(`smoke: ${version} on Node ${process.versions.node}: --version, token, start, tools/list all fine`);
