@@ -10,6 +10,7 @@ import { ToolListChangedNotificationSchema, type CallToolResult, type Tool } fro
 import pkg from "../package.json" with { type: "json" };
 import { builtinTools, callBuiltin, systemNote } from "./builtin.ts";
 import type { Config, UpstreamConfig } from "./config.ts";
+import { message, oneLine, silent, type Logger } from "./log.ts";
 
 export const VERSION = pkg.version;
 const SEPARATOR = "__";
@@ -21,13 +22,15 @@ const MAX_BACKOFF_MS = 30_000;
 const HEALTHY_MS = 30_000;
 /** How long the start waits for the pass-through servers before it reports; slower ones join later. */
 const START_WAIT_MS = 5_000;
-
-type Log = (line: string) => void;
+/** The built-in file tools take milliseconds: one still running after this is stuck (a network drive, a locked file). */
+const QUICK_TOOL_WARN_MS = 5_000;
+/** A command or a pass-through tool still running is said every so often, with the last thing it did. */
+const LONG_CALL_NOTE_MS = 30_000;
 
 class Upstream {
   readonly name: string;
   private readonly cfg: UpstreamConfig;
-  private readonly log: Log;
+  private readonly log: Logger;
   private client: Client | undefined;
   /** The client being connected, so that close() can stop a server that is still starting. */
   private pending: Client | undefined;
@@ -41,7 +44,7 @@ class Upstream {
   instructions = "";
   error = "";
 
-  constructor(name: string, cfg: UpstreamConfig, log: Log) {
+  constructor(name: string, cfg: UpstreamConfig, log: Logger) {
     this.name = name;
     this.cfg = cfg;
     this.log = log;
@@ -76,7 +79,7 @@ class Upstream {
         // the SDK adds a minimal environment (PATH, HOME ...) to `env`
         const stdio = new StdioClientTransport({ command: this.cfg.command, args: this.cfg.args, env: this.cfg.env, cwd: this.cfg.cwd, stderr: "pipe" });
         // whole lines: a chunk of the pipe may end in the middle of one
-        if (stdio.stderr) createInterface({ input: stdio.stderr as Readable }).on("line", (line) => line.trim() && this.log(`[${this.name}] ${line}`));
+        if (stdio.stderr) createInterface({ input: stdio.stderr as Readable }).on("line", (line) => line.trim() && this.log.info(`[${this.name}] ${line}`));
         transport = stdio;
       }
       client.onclose = () => {
@@ -84,7 +87,7 @@ class Upstream {
         this.client = undefined;
         this.error = "disconnected";
         this.failed(true);
-        if (!this.closed) this.log(`[${this.name}] disconnected`);
+        if (!this.closed) this.log.warn(`[${this.name}] disconnected: it is started again when a tool of it is needed`);
       };
       await client.connect(transport, { timeout: CONNECT_TIMEOUT_MS });
       client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
@@ -96,11 +99,11 @@ class Upstream {
       this.client = client;
       this.connectedAt = Date.now();
       this.error = "";
-      this.log(`[${this.name}] connected: ${this.tools.length} tools`);
+      this.log.info(`[${this.name}] connected: ${this.tools.length} tools`);
     } catch (e) {
       this.failed(false);
-      this.error = e instanceof Error ? e.message : String(e);
-      if (!this.closed) this.log(`[${this.name}] cannot start: ${this.error}`);
+      this.error = message(e);
+      if (!this.closed) this.log.error(`[${this.name}] cannot start: ${this.error}`);
       await client.close().catch(() => undefined);
     } finally {
       if (this.pending === client) this.pending = undefined;
@@ -139,9 +142,9 @@ export class Hub {
   private readonly builtinNames: Set<string>;
   private readonly note: string;
   private readonly upstreams: Upstream[];
-  private readonly log: Log;
+  private readonly log: Logger;
 
-  constructor(config: Config, log: Log = () => undefined) {
+  constructor(config: Config, log: Logger = silent) {
     this.log = log;
     this.builtin = builtinTools(config.tools);
     this.builtinNames = new Set(this.builtin.map((t) => t.name));
@@ -178,25 +181,53 @@ export class Hub {
     return this.upstreams.filter((u) => !u.ok).map((u) => ({ name: u.name, error: u.error }));
   }
 
-  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
+  /**
+   * Runs a tool and says in `log` what it does: each step, that it still runs (a warning for a file tool, which
+   * should take milliseconds), that the extension gave up on it, and how it ended: a failure as an error, with why.
+   */
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, log: Logger = this.log): Promise<CallToolResult> {
     const started = Date.now();
+    let last = "none yet";
+    const steps: Logger = {
+      info: (line) => {
+        last = line;
+        log.info(line);
+      },
+      warn: (line) => {
+        last = line;
+        log.warn(line);
+      },
+      error: log.error,
+    };
+    const quick = name !== "run_command" && this.builtinNames.has(name);
+    const tick = setInterval(
+      () => (quick ? log.warn : log.info)(`${name} still running after ${Math.round((Date.now() - started) / 1000)} s (last step: ${last})`),
+      quick ? QUICK_TOOL_WARN_MS : LONG_CALL_NOTE_MS,
+    );
+    tick.unref();
+    const cancelled = () => log.warn(`${name}: the extension gave up on the call or closed the connection after ${Date.now() - started} ms; it is stopped`);
+    signal?.addEventListener("abort", cancelled, { once: true });
     let result: CallToolResult;
     try {
-      result = await this.route(name, args, signal);
+      result = await this.route(name, args, signal, steps);
     } catch (e) {
-      result = { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true };
+      result = { content: [{ type: "text", text: message(e) }], isError: true };
+    } finally {
+      clearInterval(tick);
+      signal?.removeEventListener("abort", cancelled);
     }
     const ms = Date.now() - started;
-    // a failure shows its message too, so the console tells why without opening the page
-    this.log(`call ${name} ${short(args)} → ${result.isError ? `error: ${errorText(result)}` : "ok"} (${ms} ms)`);
+    if (result.isError) log.error(`${name} failed (${ms} ms): ${errorText(result)}`);
+    else log.info(`${name} done (${ms} ms): ${resultText(result)}`);
     return result;
   }
 
-  private async route(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
-    if (this.builtinNames.has(name)) return await callBuiltin(name, args, signal);
+  private async route(name: string, args: Record<string, unknown>, signal: AbortSignal | undefined, log: Logger): Promise<CallToolResult> {
+    if (this.builtinNames.has(name)) return await callBuiltin(name, args, signal, log);
     // by the exact exposed name: server names may contain the separator too
     const p = this.passThrough().find((x) => x.name === name);
     if (!p) throw new Error(`Unknown tool: ${name}`);
+    log.info(`passing it to the MCP server "${p.upstream.name}" as ${p.tool.name}`);
     return await p.upstream.call(p.tool.name, args, signal);
   }
 
@@ -205,19 +236,18 @@ export class Hub {
   }
 }
 
-function short(args: Record<string, unknown>): string {
-  const s = JSON.stringify(args);
-  return s.length > 160 ? `${s.slice(0, 157)}...` : s;
+function contentText(result: CallToolResult): string {
+  const parts = Array.isArray(result.content) ? result.content : [];
+  return parts.map((c) => (c.type === "text" ? c.text : `[${c.type}]`)).join(" ");
 }
 
 /** The text of an error result on one line, cut to 300 characters. */
 function errorText(result: CallToolResult): string {
-  const parts = Array.isArray(result.content) ? result.content : [];
-  const s = parts
-    .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!s) return "(no message)";
-  return s.length > 300 ? `${s.slice(0, 297)}...` : s;
+  return oneLine(contentText(result)) || "(no message)";
+}
+
+/** What a result says, for the log: its length and its start (a file read is not copied into the log). */
+function resultText(result: CallToolResult): string {
+  const s = contentText(result);
+  return `${s.length} characters: ${oneLine(s, 200) || "(empty)"}`;
 }

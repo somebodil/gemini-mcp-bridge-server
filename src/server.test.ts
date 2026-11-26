@@ -12,6 +12,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, type Config } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
+import { consoleLogger, oneLine, short, stamp, type Logger } from "./log.ts";
 import { appendPerf, cleanLines } from "./perf.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
@@ -43,6 +44,12 @@ after(async () => {
   await hub.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+/** A log that keeps its lines as "LEVEL text". */
+function capture(): { log: Logger; lines: string[] } {
+  const lines: string[] = [];
+  return { lines, log: { info: (l) => lines.push(`INFO ${l}`), warn: (l) => lines.push(`WARN ${l}`), error: (l) => lines.push(`ERROR ${l}`) } };
+}
 
 /** A hub of its own for one test, closed even when the test fails (its child processes would keep the run alive). */
 async function withHub(cfg: Config, fn: (h: Hub) => void | Promise<void>, start = true): Promise<void> {
@@ -118,20 +125,35 @@ describe("tools", () => {
     assert.doesNotMatch(new Hub(config({ tools: { shell: true, files: false }, mcpServers: {} })).instructions(), /write_file/);
   });
 
-  it("logs why a call failed, not only that it did", async () => {
-    const lines: string[] = [];
-    const h = new Hub(config({ mcpServers: {} }), (line) => lines.push(line));
+  it("logs each step of a call, and why it failed as an error", async () => {
+    const { log, lines } = capture();
+    const h = new Hub(config({ mcpServers: {} }), log);
     await h.callTool("nope__x", { a: 1 });
+    assert.match(lines.splice(0).join("\n"), /^ERROR nope__x failed \(\d+ ms\): Unknown tool: nope__x$/);
     await h.callTool("read_file", { path: join(dir, "missing.txt") });
     await h.callTool("read_file", { path: join(dir, "hello.txt") });
-    assert.match(lines[0] ?? "", /^call nope__x \{"a":1\} → error: Unknown tool: nope__x \(\d+ ms\)$/);
-    assert.match(lines[1] ?? "", /^call read_file .* → error: .*ENOENT.* \(\d+ ms\)$/);
-    assert.match(lines[2] ?? "", /^call read_file .* → ok \(\d+ ms\)$/);
+    const file = join(dir, "logged", "out.txt");
+    const wrote = `Wrote 5 bytes to ${file}.`;
+    await h.callTool("write_file", { path: file, content: "hello" });
+    await h.callTool("write_file", { path: file, content: { not: "a string" } });
+    const got = lines.splice(0).map((l) => l.replace(/\(\d+ ms\)/, "(N ms)"));
+    assert.equal(got[0], `INFO reading ${join(dir, "missing.txt")}`);
+    assert.match(got[1] ?? "", /^ERROR read_file failed \(N ms\): ENOENT/);
+    assert.deepEqual(got.slice(2), [
+      `INFO reading ${join(dir, "hello.txt")}`,
+      "INFO read_file done (N ms): 18 characters: line1 line2 line3",
+      `INFO creating the folders of ${file} if missing`,
+      `INFO writing 5 bytes to ${file}`,
+      `INFO write_file done (N ms): ${wrote.length} characters: ${wrote}`,
+      'ERROR write_file failed (N ms): "content" must be a string; it was an object.',
+    ]);
     await h.callTool("run_command", { command: node("process.stdout.write('a\\n'.repeat(500));setTimeout(function(){},5000)"), timeout_seconds: 1 });
-    const timedOut = lines[3] ?? "";
-    assert.match(timedOut, /→ error: Stopped after/);
-    assert.doesNotMatch(timedOut, /\n/, "one line");
-    assert.ok(timedOut.length < 600, "cut short");
+    assert.match(lines[0] ?? "", /^INFO running with .* time limit 1 s: /);
+    assert.match(lines[1] ?? "", /^INFO started: process \d+$/);
+    assert.match(lines[2] ?? "", /^WARN time limit of 1 s reached: stopping process \d+/);
+    const timedOut = lines.at(-1) ?? "";
+    assert.match(timedOut, /^ERROR run_command failed \(\d+ ms\): Stopped after 1 s/);
+    assert.ok(timedOut.length < 600, "cut short, on one line");
   });
 
   it("reads, writes and lists files", async () => {
@@ -336,6 +358,76 @@ describe("hard cases", () => {
       await h.close();
       remote.closeAllConnections();
       remote.close();
+    }
+  });
+});
+
+describe("the log", () => {
+  it("writes lines with the time to the millisecond and the level, at once", () => {
+    const out: string[] = [];
+    const log = consoleLogger((t) => out.push(t));
+    log.info("a");
+    log.warn("b");
+    log.error("c");
+    assert.equal(out.length, 3);
+    assert.match(out[0], /^\d\d:\d\d:\d\d\.\d{3} INFO  a\n$/);
+    assert.match(out[1], /^\d\d:\d\d:\d\d\.\d{3} WARN  b\n$/);
+    assert.match(out[2], /^\d\d:\d\d:\d\d\.\d{3} ERROR c\n$/);
+    assert.equal(stamp(new Date(2026, 0, 2, 3, 4, 5, 6)), "03:04:05.006");
+    // long arguments show their start and length; a line holds no control characters
+    assert.equal(short({ content: "x".repeat(500), n: 1 }), `{"content":"${"x".repeat(120)}…(500 chars)","n":1}`);
+    assert.equal(oneLine("a\n\tb\u001b[2J\u202ec  "), "a b [2J c");
+  });
+
+  it("says what came, each step, and what went back, under the number of the request", async () => {
+    const { log, lines } = capture();
+    const server = await listen(hub, { port: 0, token: TOKEN, log });
+    const to = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+    const auth = { authorization: `Bearer ${TOKEN}` };
+    const post = (body: string, signal?: AbortSignal) =>
+      fetch(to, { method: "POST", headers: { ...auth, "content-type": "application/json", accept: "application/json, text/event-stream" }, body, signal });
+    const rpc = (method: string, params: unknown) => JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+    const of = (n: number) => lines.filter((l) => l.includes(` #${n} `)).map((l) => l.replace(/\d+ ms/g, "N ms"));
+    try {
+      const file = join(dir, "via-http.txt");
+      assert.equal((await post(rpc("tools/call", { name: "write_file", arguments: { path: file, content: "hi" } }))).status, 200);
+      const body = rpc("tools/call", { name: "write_file", arguments: { path: file, content: "hi" } });
+      const wrote = `Wrote 2 bytes to ${file}.`;
+      const one = of(1);
+      assert.equal(one.length, 5, one.join("\n"));
+      assert.deepEqual(one.slice(0, 4), [
+        `INFO #1 ← tools/call write_file {"path":${JSON.stringify(file)},"content":"hi"} · ${Buffer.byteLength(body)} bytes from 127.0.0.1`,
+        `INFO #1 creating the folders of ${file} if missing`,
+        `INFO #1 writing 2 bytes to ${file}`,
+        `INFO #1 write_file done (N ms): ${wrote.length} characters: ${wrote}`,
+      ]);
+      assert.match(one[4] ?? "", /^INFO #1 → HTTP 200, \d+ bytes, N ms$/);
+
+      // what goes wrong is an error at once: a failed tool, a body that is not JSON, a method that is not there
+      await post(rpc("tools/call", { name: "write_file", arguments: { path: file } }));
+      assert.match(of(2).join("\n"), /ERROR #2 write_file failed \(N ms\): "content" must be a string; it was nothing\./);
+      assert.equal((await post("{not json")).status, 400);
+      assert.match(of(3)[0] ?? "", /^ERROR #3 the body is not JSON \(.*\): \{not json$/);
+      await post(rpc("no/such", {}));
+      assert.match(of(4).at(-1) ?? "", /^ERROR #4 → HTTP 200, \d+ bytes, N ms: JSON-RPC error -32601 Method not found$/);
+      await fetch(to, { method: "POST", headers: { authorization: "Bearer wrong" }, body: "x" });
+      assert.match(of(5)[0] ?? "", /^WARN #5 refused POST \/mcp from 127\.0\.0\.1 \(origin none\): Missing or wrong token$/);
+
+      // the extension gives up while a command runs: the command is stopped, and the reply had nowhere to go
+      const ctrl = new AbortController();
+      const long = post(rpc("tools/call", { name: "run_command", arguments: { command: node("setTimeout(function(){},10000)") } }), ctrl.signal);
+      setTimeout(() => ctrl.abort(), 500);
+      await assert.rejects(long);
+      const until = Date.now() + 5000;
+      while (!of(6).some((l) => l.includes("run_command failed")) && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+      const six = of(6).join("\n");
+      assert.match(six, /ERROR #6 the connection closed after N ms, before the reply was sent/);
+      assert.match(six, /WARN #6 run_command: the extension gave up on the call or closed the connection after N ms; it is stopped/);
+      assert.match(six, /WARN #6 cancelled: stopping process/);
+      assert.match(six, /ERROR #6 run_command failed \(N ms\): Stopped: the call was cancelled/);
+    } finally {
+      server.closeAllConnections();
+      server.close();
     }
   });
 });

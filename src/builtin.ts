@@ -6,6 +6,7 @@ import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/p
 import { arch, homedir, platform, release } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { oneLine, silent, type Logger } from "./log.ts";
 
 const OUTPUT_LIMIT = 200_000;
 const READ_LIMIT = 4 * 1024 * 1024;
@@ -130,9 +131,17 @@ function resolvePath(p: string): string {
 
 const text = (t: string, isError = false): CallToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 
+/** What a value is, for an error message. */
+function kind(v: unknown): string {
+  if (v === undefined) return "nothing";
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "an array";
+  return typeof v === "object" ? "an object" : `a ${typeof v}`;
+}
+
 function required(args: Record<string, unknown>, key: string): string {
   const v = args[key];
-  if (typeof v !== "string") throw new Error(`"${key}" must be a string.`);
+  if (typeof v !== "string") throw new Error(`"${key}" must be a string; it was ${kind(v)}.`);
   return v;
 }
 
@@ -146,23 +155,37 @@ function int(v: unknown): number | undefined {
   return typeof n === "number" && Number.isFinite(n) ? Math.floor(n) : undefined;
 }
 
-/** Runs a built-in tool; `name` is one of builtinTools(). Wrong arguments come back as an error result. */
-export async function callBuiltin(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<CallToolResult> {
+/**
+ * Runs a built-in tool; `name` is one of builtinTools(). Wrong arguments come back as an error result. Each step
+ * is said in `log` before it is taken, so that a step that hangs is the last one there.
+ */
+export async function callBuiltin(name: string, args: Record<string, unknown>, signal?: AbortSignal, log: Logger = silent): Promise<CallToolResult> {
   try {
     switch (name) {
       case "run_command":
-        return await runCommand(required(args, "command"), optional(args, "cwd"), int(args.timeout_seconds) ?? 60, signal);
-      case "read_file":
-        return await readText(resolvePath(required(args, "path")), int(args.offset), int(args.limit));
+        return await runCommand(required(args, "command"), optional(args, "cwd"), int(args.timeout_seconds) ?? 60, signal, log);
+      case "read_file": {
+        const path = resolvePath(required(args, "path"));
+        const offset = int(args.offset);
+        const limit = int(args.limit);
+        log.info(`reading ${path}${offset !== undefined || limit !== undefined ? ` (offset ${offset ?? 1}, limit ${limit ?? "none"})` : ""}`);
+        return await readText(path, offset, limit);
+      }
       case "write_file": {
         const path = resolvePath(required(args, "path"));
         const content = required(args, "content");
+        const bytes = Buffer.byteLength(content);
+        log.info(`creating the folders of ${path} if missing`);
         await mkdir(dirname(path), { recursive: true });
+        log.info(`${args.append === true ? "appending" : "writing"} ${bytes} bytes to ${path}`);
         await (args.append === true ? appendFile : writeFile)(path, content);
-        return text(`${args.append === true ? "Added" : "Wrote"} ${Buffer.byteLength(content)} bytes to ${path}.`);
+        return text(`${args.append === true ? "Added" : "Wrote"} ${bytes} bytes to ${path}.`);
       }
-      case "list_directory":
-        return await listDirectory(resolvePath(required(args, "path")));
+      case "list_directory": {
+        const path = resolvePath(required(args, "path"));
+        log.info(`listing ${path}`);
+        return await listDirectory(path);
+      }
       default:
         return text(`Unknown tool: ${name}`, true);
     }
@@ -230,11 +253,12 @@ export function stopAllCommands(): void {
  * Runs one command line. The result is ready when the shell exits, not when every process holding its output
  * does: a command may leave something running in the background (`server &`), which must not hold the answer.
  */
-async function runCommand(command: string, cwd: string | undefined, timeoutSec: number, signal?: AbortSignal): Promise<CallToolResult> {
+async function runCommand(command: string, cwd: string | undefined, timeoutSec: number, signal: AbortSignal | undefined, log: Logger): Promise<CallToolResult> {
   const dir = cwd ? resolvePath(cwd) : homedir();
   if (cwd && !(await stat(dir).catch(() => null))?.isDirectory()) return text(`The folder ${dir} does not exist.`, true);
   if (signal?.aborted) return text("Cancelled before it started.", true);
   const limitMs = Math.min(600, Math.max(1, timeoutSec)) * 1000;
+  log.info(`running with ${SHELL} in ${dir}, time limit ${limitMs / 1000} s: ${oneLine(command, 200)}`);
   return new Promise((done) => {
     // cmd.exe /s /c strips the outer quotes: quoting the whole line keeps a quoted program path intact
     const child = spawn(SHELL, WIN ? ["/d", "/s", "/c", `"${command}"`] : ["-c", command], {
@@ -245,6 +269,7 @@ async function runCommand(command: string, cwd: string | undefined, timeoutSec: 
       stdio: ["ignore", "pipe", "pipe"],
     });
     running.add(child);
+    if (child.pid) log.info(`started: process ${child.pid}`);
     let out = "";
     let err = "";
     let total = 0;
@@ -280,16 +305,25 @@ async function runCommand(command: string, cwd: string | undefined, timeoutSec: 
     };
     const stop = (why: "time" | "cancel") => {
       stopped = why;
+      log.warn(`${why === "time" ? `time limit of ${limitMs / 1000} s reached` : "cancelled"}: stopping process ${child.pid ?? "?"} and the processes it started`);
       killTree(child);
       // a process that left the group may keep the pipes open: answer anyway
-      setTimeout(() => report(null, "SIGKILL"), 1000);
+      setTimeout(() => {
+        if (!finished) log.warn("its output was still open 1 s after the stop (a process that left its group): answering without the rest");
+        report(null, "SIGKILL");
+      }, 1000);
     };
     const timer = setTimeout(() => stop("time"), limitMs);
     const onAbort = () => stop("cancel");
     signal?.addEventListener("abort", onAbort, { once: true });
     child.on("error", (e) => finish(text(`Could not start ${SHELL}: ${e.message}`, true)));
     // output still in the pipes arrives right after the exit; background processes may hold them for good
-    child.on("exit", (code, sig) => setTimeout(() => report(code, sig), 200));
+    child.on("exit", (code, sig) =>
+      setTimeout(() => {
+        if (!finished) log.info(`the shell exited (${code ?? sig}) but a process it started still holds its output: answering now`);
+        report(code, sig);
+      }, 200),
+    );
     child.on("close", report);
   });
 }

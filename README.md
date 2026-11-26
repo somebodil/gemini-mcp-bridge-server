@@ -11,7 +11,7 @@ npx gemini-mcp-bridge-server
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-gemini-mcp-bridge-server 0.4.0
+gemini-mcp-bridge-server 0.5.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
@@ -19,7 +19,7 @@ gemini-mcp-bridge-server 0.4.0
   Tools:  run_command, read_file, write_file, list_directory
 ```
 
-Leave the window open while you use Gemini. Every call shows up there.
+Leave the window open while you use Gemini. Every request shows up there as it comes (see *Log* below).
 
 ## Start it when you log in
 
@@ -72,6 +72,23 @@ The config file is `~/.config/gemini-mcp-bridge-server/config.json` (on Windows 
 The server writes this file only on the first start and with a new token; keys it does not know stay in it. A wrong value (a port that is not a number, a server without `command` or `url`) stops the start with a message that names it.
 
 `mcpServers` has the shape other MCP clients use, so an existing list can be copied in: stdio servers (`command`, `args`, `env`, `cwd`) and Streamable HTTP servers (`url`, `headers`). Their tools appear with the server's name in front, as `playwright__browser_navigate`. `"disabled": true` leaves one out. A server that stops is started again at its next call (after a short wait that grows while it keeps failing).
+
+## Log
+
+While it runs, the server writes to stdout (the service: to its log, above) each request as it comes, each step of the work, and the reply as it goes out, all under the number of the request. Something going wrong is a `WARN` or `ERROR` line at once: a tool that failed (with why), wrong arguments, a body that is not JSON, a refused request, a file tool still running after 5 seconds, a call the extension gave up on, a reply that had nowhere to go.
+
+```
+13:29:16.080 INFO  #2 ← tools/call write_file {"path":"/home/you/notes/a.txt","content":"hello\nworld"} · 147 bytes from 127.0.0.1
+13:29:16.081 INFO  #2 creating the folders of /home/you/notes/a.txt if missing
+13:29:16.082 INFO  #2 writing 11 bytes to /home/you/notes/a.txt
+13:29:16.082 INFO  #2 write_file done (1 ms): 40 characters: Wrote 11 bytes to /home/you/notes/a.txt.
+13:29:16.083 INFO  #2 → HTTP 200, 113 bytes, 4 ms
+13:29:16.091 INFO  #3 ← tools/call write_file {"path":"/home/you/notes/b.txt"} · 122 bytes from 127.0.0.1
+13:29:16.091 ERROR #3 write_file failed (0 ms): "content" must be a string; it was nothing.
+13:29:17.143 ERROR #8 the connection closed after 1011 ms, before the reply was sent: the extension gave up or went away
+```
+
+A string argument over 200 characters (the content of a file) shows as its start and its length; a result, as its length and its start.
 
 ## Performance log
 

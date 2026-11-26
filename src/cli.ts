@@ -8,6 +8,7 @@ import { stopAllCommands } from "./builtin.ts";
 import { defaultConfigPath, loadConfig, saveConfig, validPort } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
+import { consoleLogger } from "./log.ts";
 import { perfLogPath, showPerf } from "./perf.ts";
 import { fromNpxCache, install, logPath, NAME, uninstall } from "./service.ts";
 
@@ -29,11 +30,12 @@ Options:
   -h, --help       This text
   -v, --version    The version
 
+While it runs, it writes each request to stdout as it comes: the call and its arguments, each step of the
+work, and the reply; WARN and ERROR lines when something goes wrong.
+
 The config file also lists MCP servers to pass through, in the usual "mcpServers" shape:
   "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp@latest"] } }
 `;
-
-const stamp = () => new Date().toTimeString().slice(0, 8);
 
 function port(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
@@ -88,7 +90,12 @@ async function main(): Promise<void> {
   const { config, created } = loadConfig(path, { newToken: values["new-token"] });
   const listenPort = port(values.port, config.port);
   const tools = { shell: config.tools.shell && !values["no-shell"], files: config.tools.files && !values["no-files"] };
-  const log = (line: string) => process.stderr.write(`${stamp()} ${line}\n`);
+  const log = consoleLogger();
+  // a console closed under the server: the server goes on without its log
+  process.stdout.on("error", () => undefined);
+  // a mistake of the server's own is said at once; one request's failure never ends the server (http.ts)
+  process.on("unhandledRejection", (e) => log.error(`unexpected failure: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`));
+  process.on("uncaughtExceptionMonitor", (e) => log.error(`the server stops on an error of its own: ${e.stack ?? e.message}`));
   const hub = new Hub({ ...config, tools }, log);
   // the port first: a second instance learns at once that it is taken
   const perfLog = perfLogPath(path);
@@ -102,6 +109,7 @@ async function main(): Promise<void> {
     // a second Ctrl+C does not wait for the first
     if (stopping) process.exit(1);
     stopping = true;
+    log.info("stopping");
     stopAllCommands();
     http.close();
     await hub.close();
@@ -126,6 +134,7 @@ async function main(): Promise<void> {
     "In Chrome: click the Gemini MCP Bridge icon > Settings, and enter the URL and the token.",
     "From another computer, or through a forwarded port: the same URL with that address and port.",
     "Leave this window open while you use Gemini; Ctrl+C stops the server.",
+    "Each request is written below as it comes: the call, each step of the work, and the reply (WARN and ERROR when something goes wrong).",
     "",
   ];
   process.stdout.write(out.join("\n"));
