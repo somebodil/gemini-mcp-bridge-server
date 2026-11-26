@@ -15,7 +15,7 @@ const fail = (msg) => {
   process.exit(1);
 };
 
-const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+const { name, version } = JSON.parse(readFileSync("package.json", "utf8"));
 const printed = execFileSync(process.execPath, [cli, "--version"], { encoding: "utf8" }).trim();
 if (printed !== version) fail(`--version printed ${printed}, package.json has ${version}`);
 const token = execFileSync(process.execPath, [cli, "token", "--config", config], { encoding: "utf8" }).match(/Token: (\S+)/)?.[1];
@@ -42,7 +42,7 @@ const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabiliti
 const tools = (await rpc("tools/list")).tools.map((t) => t.name);
 server.kill("SIGTERM");
 rmSync(dir, { recursive: true, force: true });
-if (init?.serverInfo?.name !== "gemini-mcp-bridge-server") fail(`initialize answered ${JSON.stringify(init)}`);
+if (init?.serverInfo?.name !== name) fail(`initialize answered ${JSON.stringify(init)}`);
 // write_file only without bash (cmd.exe on Windows): elsewhere run_command writes files
 const expected = process.platform === "win32" ? "run_command,read_file,write_file,list_directory" : "run_command,read_file,list_directory";
 if (tools.join(",") !== expected) fail(`tools/list answered ${tools.join(",")}`);

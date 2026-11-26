@@ -10,7 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { RUNS_BASH } from "./builtin.ts";
-import { loadConfig, type Config } from "./config.ts";
+import { loadConfig, takeOverFormerConfig, type Config } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
 import { consoleLogger, oneLine, short, stamp, type Logger } from "./log.ts";
@@ -88,7 +88,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<{ text
 describe("tools", () => {
   it("lists the built-in tools and the pass-through ones, with instructions about the computer", async () => {
     const c = await connect();
-    assert.equal(c.getServerVersion()?.name, "gemini-mcp-bridge-server");
+    assert.equal(c.getServerVersion()?.name, "local-mcp-bridge-server");
     assert.equal(c.getServerVersion()?.version, VERSION);
     assert.match(c.getInstructions() ?? "", /Home folder: .*Relative paths in the tools start there/);
     if (WIN) assert.match(c.getInstructions() ?? "", /run_command uses /);
@@ -634,6 +634,22 @@ describe("config file", () => {
     assert.equal(statSync(open).mode & 0o777, 0o600);
   });
 
+  it("takes over the file of the former name once, as it is, readable only by the user", () => {
+    const former = cfg("former.json", { token: "the-token-the-extension-holds", port: 7400, note: "mine" });
+    const path = join(dir, "cfg", "taken", "config.json");
+    assert.equal(takeOverFormerConfig(path, former), former);
+    assert.equal(readFileSync(path, "utf8"), readFileSync(former, "utf8"));
+    if (!WIN) assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.equal(loadConfig(path).config.token, "the-token-the-extension-holds");
+    // once: a file of its own is never replaced
+    writeFileSync(former, JSON.stringify({ token: "another-token-of-enough-length" }));
+    assert.equal(takeOverFormerConfig(path, former), undefined);
+    assert.equal(loadConfig(path).config.token, "the-token-the-extension-holds");
+    // no former file: nothing is made
+    assert.equal(takeOverFormerConfig(join(dir, "cfg", "none", "config.json"), join(dir, "cfg", "missing.json")), undefined);
+    assert.equal(existsSync(join(dir, "cfg", "none")), false);
+  });
+
   it("says what is wrong instead of guessing", () => {
     const wrong = (content: unknown, msg: RegExp) => assert.throws(() => loadConfig(cfg("bad.json", content)), msg);
     wrong("{not json", /Cannot read .*bad\.json/);
@@ -681,6 +697,16 @@ describe("command line", () => {
     assert.equal(r.out, `URL:   http://127.0.0.1:7341/mcp\nToken: ${saved.token}\n`);
   });
 
+  it("goes on with the config of its former name when no --config is given", () => {
+    const home = join(dir, "config-home");
+    mkdirSync(join(home, "gemini-mcp-bridge-server"), { recursive: true });
+    writeFileSync(join(home, "gemini-mcp-bridge-server", "config.json"), JSON.stringify({ token: "kept-token-0123456789", port: 7402 }));
+    // the default folder is under XDG_CONFIG_HOME, and under APPDATA on Windows
+    const out = execFileSync(process.execPath, [CLI, "token"], { env: { ...process.env, XDG_CONFIG_HOME: home, APPDATA: home }, encoding: "utf8" });
+    assert.equal(out, "URL:   http://127.0.0.1:7402/mcp\nToken: kept-token-0123456789\n");
+    assert.ok(existsSync(join(home, "local-mcp-bridge-server", "config.json")));
+  });
+
   it("refuses bad input with a message and exit code 1", async () => {
     for (const [args, msg] of [
       [["--port", "abc"], /--port must be a number from 1 to 65535, not abc/],
@@ -707,7 +733,7 @@ describe("command line", () => {
     p.kill("SIGINT");
     await new Promise((r) => p.on("close", r));
     assert.match(out, /URL: {4}http:\/\/127\.0\.0\.1:47123\/mcp/);
-    assert.match(out, /Token: {2}\(not printed here; run: gemini-mcp-bridge-server token\)/, "no terminal: no token");
+    assert.match(out, /Token: {2}\(not printed here; run: local-mcp-bridge-server token\)/, "no terminal: no token");
     const after = JSON.parse(readFileSync(path, "utf8")) as { port: number; token: string };
     assert.equal(after.port, before.port);
     assert.notEqual(after.token, before.token);

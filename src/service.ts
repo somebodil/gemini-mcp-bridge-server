@@ -8,9 +8,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, posix, win32 } from "node:path";
+import { FORMER_NAME, NAME } from "./name.ts";
 
-export const NAME = "gemini-mcp-bridge-server";
-export const LABEL = "io.github.somebodil.gemini-mcp-bridge-server";
+const label = (name: string) => `io.github.somebodil.${name}`;
+export const LABEL = label(NAME);
 
 export interface ServiceSpec {
   /** The program and its arguments: node, the script, its options (absolute paths). */
@@ -28,10 +29,14 @@ export interface ServiceFile {
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-export const agentPath = (home = homedir()) => posix.join(home, "Library", "LaunchAgents", `${LABEL}.plist`);
-export const unitPath = (home = homedir()) => posix.join(process.env.XDG_CONFIG_HOME || posix.join(home, ".config"), "systemd", "user", `${NAME}.service`);
-export const startupPath = (appData = process.env.APPDATA ?? win32.join(homedir(), "AppData", "Roaming")) =>
-  win32.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${NAME}.vbs`);
+export const agentPath = (home = homedir(), name = NAME) => posix.join(home, "Library", "LaunchAgents", `${label(name)}.plist`);
+export const unitPath = (home = homedir(), name = NAME) => posix.join(process.env.XDG_CONFIG_HOME || posix.join(home, ".config"), "systemd", "user", `${name}.service`);
+export const startupPath = (appData = process.env.APPDATA ?? win32.join(homedir(), "AppData", "Roaming"), name = NAME) =>
+  win32.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", `${name}.vbs`);
+
+/** The file of the service of `name` on this system. */
+const fileOf = (name: string) =>
+  process.platform === "darwin" ? agentPath(homedir(), name) : process.platform === "win32" ? startupPath(undefined, name) : unitPath(homedir(), name);
 
 export function launchAgent(spec: ServiceSpec, home?: string): ServiceFile {
   const args = spec.command.map((a) => `    <string>${xml(a)}</string>`).join("\n");
@@ -134,8 +139,32 @@ function write(f: ServiceFile): void {
 
 const uid = () => process.getuid?.() ?? 0;
 
-/** Installs and starts the service; returns the lines to show. */
+/** Stops the service of `name` and removes its file; returns the file, or undefined when there was none. */
+function remove(name: string): string | undefined {
+  const systemd = process.platform !== "darwin" && process.platform !== "win32";
+  if (process.platform === "darwin") run("launchctl", ["bootout", `gui/${uid()}/${label(name)}`], true);
+  if (systemd) run("systemctl", ["--user", "disable", "--now", name], true);
+  const f = fileOf(name);
+  if (!existsSync(f)) return undefined;
+  rmSync(f);
+  if (systemd) run("systemctl", ["--user", "daemon-reload"], true);
+  return f;
+}
+
+/** The file of the service of the former name, when it is still installed (it may hold the port). */
+export function formerService(): string | undefined {
+  const f = fileOf(FORMER_NAME);
+  return existsSync(f) ? f : undefined;
+}
+
+/** Installs and starts the service, in place of the one of the former name; returns the lines to show. */
 export function install(spec: ServiceSpec): string[] {
+  const former = remove(FORMER_NAME);
+  const note = process.platform === "win32" ? " (the server it started runs until you log out; this one starts at your next logon)" : "";
+  return [...(former ? [`Removed the service of the former name, ${FORMER_NAME}: ${former}${note}`] : []), ...installOwn(spec)];
+}
+
+function installOwn(spec: ServiceSpec): string[] {
   if (process.platform === "darwin") {
     mkdirSync(dirname(spec.log), { recursive: true });
     const f = launchAgent(spec);
@@ -163,21 +192,10 @@ export function install(spec: ServiceSpec): string[] {
   return [`Installed: ${f.path}`, `It starts now and whenever you log in. Log: journalctl --user -u ${NAME}`];
 }
 
+/** Stops and removes the service, and the one of the former name. */
 export function uninstall(): string[] {
-  if (process.platform === "darwin") {
-    run("launchctl", ["bootout", `gui/${uid()}/${LABEL}`], true);
-    if (!existsSync(agentPath())) return ["No service was installed."];
-    rmSync(agentPath());
-    return [`Removed ${agentPath()}; the server is stopped.`];
-  }
-  if (process.platform === "win32") {
-    if (!existsSync(startupPath())) return ["No service was installed."];
-    rmSync(startupPath());
-    return [`Removed ${startupPath()}. A server started by it keeps running until you log out.`];
-  }
-  run("systemctl", ["--user", "disable", "--now", NAME], true);
-  if (!existsSync(unitPath())) return ["No service was installed."];
-  rmSync(unitPath());
-  run("systemctl", ["--user", "daemon-reload"], true);
-  return [`Removed ${unitPath()}; the server is stopped.`];
+  const removed = [remove(NAME), remove(FORMER_NAME)].filter((f): f is string => f !== undefined);
+  if (!removed.length) return ["No service was installed."];
+  const after = process.platform === "win32" ? ". A server started by it keeps running until you log out." : "; the server is stopped.";
+  return removed.map((f) => `Removed ${f}${after}`);
 }

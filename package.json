@@ -1,19 +1,19 @@
 {
-  "name": "gemini-mcp-bridge-server",
-  "version": "0.6.0",
+  "name": "local-mcp-bridge-server",
+  "version": "0.7.0",
   "description": "Local MCP server for the Gemini MCP Bridge Chrome extension: your computer's shell and files, plus the MCP servers you list",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/somebodil/gemini-mcp-bridge-server.git"
+    "url": "git+https://github.com/somebodil/local-mcp-bridge-server.git"
   },
-  "homepage": "https://github.com/somebodil/gemini-mcp-bridge-server#readme",
+  "homepage": "https://github.com/somebodil/local-mcp-bridge-server#readme",
   "bugs": {
-    "url": "https://github.com/somebodil/gemini-mcp-bridge-server/issues"
+    "url": "https://github.com/somebodil/local-mcp-bridge-server/issues"
   },
   "bin": {
-    "gemini-mcp-bridge-server": "dist/cli.js"
+    "local-mcp-bridge-server": "dist/cli.js"
   },
   "files": [
     "dist"

@@ -11,6 +11,7 @@ import pkg from "../package.json" with { type: "json" };
 import { builtinTools, callBuiltin, systemNote } from "./builtin.ts";
 import type { Config, UpstreamConfig } from "./config.ts";
 import { message, oneLine, silent, type Logger } from "./log.ts";
+import { NAME } from "./name.ts";
 
 export const VERSION = pkg.version;
 const SEPARATOR = "__";
@@ -69,7 +70,7 @@ class Upstream {
   }
 
   private async start(): Promise<void> {
-    const client = new Client({ name: "gemini-mcp-bridge-server", version: VERSION });
+    const client = new Client({ name: NAME, version: VERSION });
     this.pending = client;
     try {
       let transport: StdioClientTransport | StreamableHTTPClientTransport;

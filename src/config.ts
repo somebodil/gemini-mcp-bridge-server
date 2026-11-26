@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { FORMER_NAME, NAME } from "./name.ts";
 
 export type UpstreamConfig = (
   | { command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
@@ -19,11 +20,23 @@ export interface Config {
 }
 
 const DEFAULT_PORT = 7341;
-const NAME = "gemini-mcp-bridge-server";
 
-export function defaultConfigPath(): string {
-  if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), NAME, "config.json");
-  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), NAME, "config.json");
+/** Where the config file is when no --config is given: in the folder of `name`. */
+export function defaultConfigPath(name = NAME): string {
+  if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), name, "config.json");
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), name, "config.json");
+}
+
+/**
+ * When the server first runs under its new name with the default config, the file of its former name is copied to
+ * `path`: the token the extension holds, the port and the MCP servers stay as they were. Returns the file copied.
+ */
+export function takeOverFormerConfig(path: string, former = defaultConfigPath(FORMER_NAME)): string | undefined {
+  if (existsSync(path) || !existsSync(former)) return undefined;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, readFileSync(former), { mode: 0o600 });
+  if (process.platform !== "win32") chmodSync(path, 0o600);
+  return former;
 }
 
 export function validPort(v: unknown): v is number {

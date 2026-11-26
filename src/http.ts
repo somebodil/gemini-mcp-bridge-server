@@ -20,6 +20,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION, type Hub } from "./hub.ts";
 import { message, oneLine, short, silent, tagged, type Logger } from "./log.ts";
+import { NAME } from "./name.ts";
 import { appendPerf, cleanLines, PERF_BODY_LIMIT } from "./perf.ts";
 
 const BODY_LIMIT = 8 * 1024 * 1024;
@@ -38,7 +39,7 @@ export interface ListenOptions {
 }
 
 function mcpServerFor(hub: Hub, log: Logger): Server {
-  const server = new Server({ name: "gemini-mcp-bridge-server", version: VERSION }, { capabilities: { tools: {} }, instructions: hub.instructions() });
+  const server = new Server({ name: NAME, version: VERSION }, { capabilities: { tools: {} }, instructions: hub.instructions() });
   server.setRequestHandler(ListToolsRequestSchema, () => {
     const tools = hub.listTools();
     log.info(`listed ${tools.length} tools`);
@@ -227,7 +228,7 @@ export function listen(hub: Hub, opts: ListenOptions): Promise<HttpServer> {
       const path = (req.url ?? "/").split("?")[0];
       const perfFile = path === "/perf" ? opts.perfLog : undefined;
       if (path !== "/mcp" && perfFile === undefined) {
-        if (path === "/" && req.method === "GET") return reply(res, 200, `gemini-mcp-bridge-server ${VERSION} is running. MCP endpoint: /mcp\n`);
+        if (path === "/" && req.method === "GET") return reply(res, 200, `${NAME} ${VERSION} is running. MCP endpoint: /mcp\n`);
         log.warn(`${req.method} ${path} from ${from(req)}: not found`);
         return reply(res, 404, "Not found");
       }

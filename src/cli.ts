@@ -1,18 +1,19 @@
-// gemini-mcp-bridge-server: the local MCP server that the Gemini MCP Bridge extension talks to.
+// local-mcp-bridge-server: the local MCP server that the Gemini MCP Bridge extension talks to.
 
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { stopAllCommands } from "./builtin.ts";
-import { defaultConfigPath, loadConfig, saveConfig, validPort } from "./config.ts";
+import { defaultConfigPath, loadConfig, saveConfig, takeOverFormerConfig, validPort } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
 import { consoleLogger } from "./log.ts";
+import { FORMER_NAME, NAME } from "./name.ts";
 import { perfLogPath, showPerf } from "./perf.ts";
-import { fromNpxCache, install, logPath, NAME, uninstall } from "./service.ts";
+import { formerService, fromNpxCache, install, logPath, uninstall } from "./service.ts";
 
-const HELP = `${NAME} ${VERSION}: your computer's tools for Gemini on the web, through the Gemini MCP Bridge extension
+const HELP = `${NAME} ${VERSION}: your computer's tools for chats on the web, through the Gemini MCP Bridge extension
 
 Usage:
   ${NAME} [options]                     Start the server
@@ -35,6 +36,10 @@ work, and the reply; WARN and ERROR lines when something goes wrong.
 
 The config file also lists MCP servers to pass through, in the usual "mcpServers" shape:
   "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp@latest"] } }
+
+Until 0.6.0 its name was ${FORMER_NAME}: without --config, the first start (or token, install-service) copies
+that name's config file (the token, the port, the servers), and install-service and uninstall-service remove that
+name's service.
 `;
 
 function port(value: string | undefined, fallback: number): number {
@@ -63,13 +68,15 @@ async function main(): Promise<void> {
   if (values.version) return void process.stdout.write(`${VERSION}\n`);
   // absolute: a service starts in another folder
   const path = values.config ? resolve(values.config) : defaultConfigPath();
+  if (command === "perf-log") return void process.stdout.write(showPerf(perfLogPath(path)));
+  if (command === "uninstall-service") return void process.stdout.write(`${uninstall().join("\n")}\n`);
+  // the first command that reads the default config takes over the file of the former name
+  const copied = values.config ? undefined : takeOverFormerConfig(path);
 
   if (command === "token") {
     const { config } = loadConfig(path);
     return void process.stdout.write(`URL:   http://127.0.0.1:${config.port}/mcp\nToken: ${config.token}\n`);
   }
-  if (command === "perf-log") return void process.stdout.write(showPerf(perfLogPath(path)));
-  if (command === "uninstall-service") return void process.stdout.write(`${uninstall().join("\n")}\n`);
   if (command === "install-service") {
     const script = realpathSync(fileURLToPath(import.meta.url));
     if (fromNpxCache(script)) {
@@ -81,7 +88,10 @@ async function main(): Promise<void> {
     if (values["no-shell"]) config.tools.shell = false;
     if (values["no-files"]) config.tools.files = false;
     saveConfig(path, { ...raw, ...config });
-    const lines = install({ command: [process.execPath, script, "--config", path], path: process.env.PATH ?? "", log: logPath() });
+    const lines = [
+      ...(copied ? [`Copied the config of ${FORMER_NAME}: ${copied} to ${path}`] : []),
+      ...install({ command: [process.execPath, script, "--config", path], path: process.env.PATH ?? "", log: logPath() }),
+    ];
     process.stdout.write(`${lines.join("\n")}\n\nFor the extension's options:\n  URL:   http://127.0.0.1:${config.port}/mcp\n  Token: ${config.token}\n`);
     return;
   }
@@ -101,8 +111,14 @@ async function main(): Promise<void> {
   const perfLog = perfLogPath(path);
   const http = await listen(hub, { port: listenPort, token: config.token, log, perfLog }).catch(async (e: NodeJS.ErrnoException) => {
     await hub.close();
-    if (e.code === "EADDRINUSE") throw new Error(`Port ${listenPort} is in use: is ${NAME} already running (perhaps as a service)? Another port: --port <n>`, { cause: e });
-    throw e;
+    if (e.code !== "EADDRINUSE") throw e;
+    const former = formerService();
+    throw new Error(
+      former
+        ? `Port ${listenPort} is in use, likely by the service of the former name, ${FORMER_NAME} (${former}). Remove it: ${NAME} uninstall-service. Or another port: --port <n>`
+        : `Port ${listenPort} is in use: is ${NAME} already running (perhaps as a service)? Another port: --port <n>`,
+      { cause: e },
+    );
   });
   let stopping = false;
   const stop = async () => {
@@ -122,18 +138,20 @@ async function main(): Promise<void> {
   const names = hub.listTools().map((t) => t.name);
   // the token goes only to a terminal: as a service, the output ends in a log file
   const token = process.stdout.isTTY ? config.token : `(not printed here; run: ${NAME} token)`;
+  const former = formerService();
   const out = [
     `${NAME} ${VERSION}`,
     `  URL:    http://127.0.0.1:${listenPort}/mcp`,
     `  Token:  ${token}`,
-    `  Config: ${path}${created ? " (new)" : ""}`,
+    `  Config: ${path}${created ? " (new)" : copied ? ` (copied from ${copied})` : ""}`,
     `  Perf:   ${perfLog} (when the extension's performance log is on)`,
     `  Tools:  ${names.length ? names.join(", ") : "none"}`,
     ...hub.notRunning().map((s) => `  Not running yet: ${s.name}${s.error ? ` (${s.error})` : " (starting)"}`),
+    ...(former ? [`  The service of the former name, ${FORMER_NAME}, is still installed (${former}). Remove it: ${NAME} uninstall-service`] : []),
     "",
     "In Chrome: click the Gemini MCP Bridge icon > Settings, and enter the URL and the token.",
     "From another computer, or through a forwarded port: the same URL with that address and port.",
-    "Leave this window open while you use Gemini; Ctrl+C stops the server.",
+    "Leave this window open while you use the extension; Ctrl+C stops the server.",
     "Each request is written below as it comes: the call, each step of the work, and the reply (WARN and ERROR when something goes wrong).",
     "",
   ];

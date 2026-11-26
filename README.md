@@ -1,41 +1,56 @@
-# gemini-mcp-bridge-server
+# local-mcp-bridge-server
 
-The local MCP server for [Gemini MCP Bridge](https://github.com/somebodil/gemini-mcp-bridge), the Chrome extension that lets Gemini on the web ([gemini.google.com](https://gemini.google.com)) use the tools of your computer.
+The local MCP server for [Gemini MCP Bridge](https://github.com/somebodil/gemini-mcp-bridge), the Chrome extension that lets Gemini on the web ([gemini.google.com](https://gemini.google.com)) use the tools of your computer. Until 0.6.0 this server was called `gemini-mcp-bridge-server`: see [From gemini-mcp-bridge-server](#from-gemini-mcp-bridge-server).
 
 The extension runs in Chrome and cannot touch your computer by itself. This server is the part that can: it runs commands, reads and writes files, and passes calls through to the other MCP servers you list. The extension reaches it at `http://127.0.0.1:7341/mcp`, or at the address of the computer the server runs on.
 
 ```bash
-npx gemini-mcp-bridge-server
+npx local-mcp-bridge-server
 ```
 
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-gemini-mcp-bridge-server 0.6.0
+local-mcp-bridge-server 0.7.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
-  Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
-  Perf:   /home/you/.config/gemini-mcp-bridge-server/perf.log (when the extension's performance log is on)
+  Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
+  Perf:   /home/you/.config/local-mcp-bridge-server/perf.log (when the extension's performance log is on)
   Tools:  run_command, read_file, list_directory
 ```
 
-Leave the window open while you use Gemini. Every request shows up there as it comes (see *Log* below).
+Leave the window open while you use the extension. Every request shows up there as it comes (see *Log* below).
 
 ## Start it when you log in
 
 Install it once, then let your system start it:
 
 ```bash
-npm install -g gemini-mcp-bridge-server
-gemini-mcp-bridge-server install-service
+npm install -g local-mcp-bridge-server
+local-mcp-bridge-server install-service
 ```
 
-It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Logs/gemini-mcp-bridge-server.log`), a systemd user service on Linux (log: `journalctl --user -u gemini-mcp-bridge-server`), a hidden script in the Startup folder on Windows (log: `%LOCALAPPDATA%\gemini-mcp-bridge-server\server.log`). No administrator rights are needed. `--port`, `--no-shell` and `--no-files` given here are saved in the config.
+It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Logs/local-mcp-bridge-server.log`), a systemd user service on Linux (log: `journalctl --user -u local-mcp-bridge-server`), a hidden script in the Startup folder on Windows (log: `%LOCALAPPDATA%\local-mcp-bridge-server\server.log`). No administrator rights are needed. `--port`, `--no-shell` and `--no-files` given here are saved in the config.
 
-- `gemini-mcp-bridge-server token` shows the URL and the token again (the service does not write the token into its log).
-- `gemini-mcp-bridge-server perf-log` shows the extension's performance log (below).
-- `gemini-mcp-bridge-server uninstall-service` stops it and removes it.
+- `local-mcp-bridge-server token` shows the URL and the token again (the service does not write the token into its log).
+- `local-mcp-bridge-server perf-log` shows the extension's performance log (below).
+- `local-mcp-bridge-server uninstall-service` stops it and removes it.
 - The service runs the Node.js that installed it, with the `PATH` of the terminal you installed it from (so that `npx` and your tools are found): after removing that Node.js version (with nvm, say) or changing your `PATH`, run `install-service` again.
+
+## From gemini-mcp-bridge-server
+
+Until 0.6.0 this server was called `gemini-mcp-bridge-server`. The new name takes over what the old one left, so the URL and the token in the extension stay as they are:
+
+- **The config:** without `--config`, the first start (or `token`, `install-service`) copies the old config file (`~/.config/gemini-mcp-bridge-server/config.json`, on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`) to the new place, with its token, port and servers.
+- **The service:** `install-service` removes the service of the old name before it installs its own, and `uninstall-service` removes both. When the old service still holds the port, the message of a start that fails says so.
+
+If you had installed the old one:
+
+```bash
+npm install -g local-mcp-bridge-server
+local-mcp-bridge-server install-service   # replaces the service of the old name
+npm uninstall -g gemini-mcp-bridge-server
+```
 
 ## Tools
 
@@ -51,11 +66,11 @@ Paths may be absolute, start with `~`, or be relative to your home folder. The s
 ## Options
 
 ```
-gemini-mcp-bridge-server [--port <n>] [--config <file>] [--no-shell] [--no-files] [--new-token]
-gemini-mcp-bridge-server token | perf-log | install-service | uninstall-service
+local-mcp-bridge-server [--port <n>] [--config <file>] [--no-shell] [--no-files] [--new-token]
+local-mcp-bridge-server token | perf-log | install-service | uninstall-service
 ```
 
-The config file is `~/.config/gemini-mcp-bridge-server/config.json` (on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`). Only your user can read it.
+The config file is `~/.config/local-mcp-bridge-server/config.json` (on Windows `%APPDATA%\local-mcp-bridge-server\config.json`). Only your user can read it.
 
 ```json
 {
@@ -92,7 +107,7 @@ A string argument over 200 characters (the content of a file) shows as its start
 
 ## Performance log
 
-When the extension's *Performance log* option is on (off by default; it is for finding out why a page is slow), the extension sends its lines to this server every ten seconds, and the server appends them to `perf.log` next to the config file. `gemini-mcp-bridge-server perf-log` shows the file. Past 1 MB it becomes `perf.log.1` and a new one begins. Only your user can read it.
+When the extension's *Performance log* option is on (off by default; it is for finding out why a page is slow), the extension sends its lines to this server every ten seconds, and the server appends them to `perf.log` next to the config file. `local-mcp-bridge-server perf-log` shows the file. Past 1 MB it becomes `perf.log.1` and a new one begins. Only your user can read it.
 
 The lines say which clicks, keys and frames took long on the page and how much of that time was the extension's own work, and every minute how much time the extension took. They carry names and numbers only, no text of the page. The same lines are on the extension's options page, with **Copy**.
 

@@ -1,6 +1,6 @@
 // The extension's performance log (an option there, off unless the user turns it on): the lines it sends to /perf
 // are appended to perf.log next to the config file, so that they can be read on the computer that runs the
-// server (`gemini-mcp-bridge-server perf-log`). The file stays small: past 1 MB it becomes perf.log.1 (replacing
+// server (`local-mcp-bridge-server perf-log`). The file stays small: past 1 MB it becomes perf.log.1 (replacing
 // the one before) and a new one begins.
 
 import { appendFileSync, readFileSync, renameSync, statSync, type Stats } from "node:fs";
