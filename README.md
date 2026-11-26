@@ -11,7 +11,7 @@ npx local-mcp-bridge-server
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-local-mcp-bridge-server 0.8.0
+local-mcp-bridge-server 0.8.1
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
@@ -41,7 +41,7 @@ npm uninstall -g gemini-mcp-bridge-server            # if you had installed it
 | `list_directory` | Lists a folder (at most 1000 entries); links show as what they point to. |
 | `write_file` | Only where `run_command` cannot write a file: without bash (`cmd.exe` on Windows) and with `--no-shell`. Writes a text file, or adds to its end. Missing folders are created. |
 
-Paths may be absolute, start with `~`, or be relative to your home folder. The server also tells Gemini, in its MCP instructions, your operating system, your home folder and your shell, so that Gemini writes paths and commands that work.
+Paths may be absolute, start with `~`, or be relative to your home folder. The server also tells Gemini, in its MCP instructions, your operating system, your home folder and your shell, so that Gemini writes paths and commands that work, and that each `run_command` starts anew in the home folder (a `cd` does not carry over to the next call).
 
 ## Options
 

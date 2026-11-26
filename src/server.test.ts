@@ -91,6 +91,8 @@ describe("tools", () => {
     assert.equal(c.getServerVersion()?.name, "local-mcp-bridge-server");
     assert.equal(c.getServerVersion()?.version, VERSION);
     assert.match(c.getInstructions() ?? "", /Home folder: .*Relative paths in the tools start there/);
+    // a cd in one call is gone in the next: Gemini is told, or it runs "cd dir" alone and then works in the home folder
+    assert.match(c.getInstructions() ?? "", /Each run_command starts a new shell in the home folder \(or in "cwd"\): a cd does not carry over to the next call\./);
     if (WIN) assert.match(c.getInstructions() ?? "", /run_command uses /);
     else {
       // Gemini puts Python into "command" unless it is told plainly not to

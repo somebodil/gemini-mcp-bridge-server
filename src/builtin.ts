@@ -59,6 +59,10 @@ type Switches = { shell: boolean; files: boolean };
  */
 const writes = (tools: Switches) => tools.files && !(tools.shell && RUNS_BASH);
 
+/** Every call is a process of its own: a cd made in one is gone in the next. */
+const NEW_SHELL =
+  'Each run_command starts a new shell in the home folder (or in "cwd"): a cd does not carry over to the next call. Pass "cwd", or put the cd in the same command (cd myproject && npm test).';
+
 /** What Gemini needs to know to write paths and commands: the kind of computer, the home folder, the shell. */
 export function systemNote(tools: Switches): string {
   const os = { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform() as string] ?? platform();
@@ -69,6 +73,7 @@ export function systemNote(tools: Switches): string {
     lines.push(
       `run_command runs its "command" with ${SHELL} -c${major ? ` (bash ${major}.${minor})` : ""}, so "command" must be bash syntax only: a command line as typed in a bash terminal. ` +
         "Never run Python or the code of any other language as bash commands.",
+      NEW_SHELL,
       `run_command also writes files: a here-document whose end word is in single quotes writes each line as it is ($, backticks, backslashes and quotes too) until a line that is only the end word; cat >> adds to the end of a file. ` +
         "Code in another language goes into a file this way, and runs in the same command, for example:",
       `mkdir -p /tmp/job && cat > /tmp/job/main.py <<'${END_WORD}' && python3 /tmp/job/main.py`,
@@ -77,7 +82,7 @@ export function systemNote(tools: Switches): string {
     );
     // macOS keeps bash 3.2: what came with bash 4 fails there
     if (major && major < 4) lines.push("This bash is older than 4: ${var^^} and ${var,,}, associative arrays (declare -A), mapfile, |& and ** do not work in it.");
-  } else if (tools.shell) lines.push(`run_command uses ${SHELL}.`);
+  } else if (tools.shell) lines.push(`run_command uses ${SHELL}.`, NEW_SHELL);
   return lines.join("\n");
 }
 
