@@ -15,6 +15,7 @@ gemini-mcp-bridge-server 0.3.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
+  Perf:   /home/you/.config/gemini-mcp-bridge-server/perf.log (when the extension's performance log is on)
   Tools:  run_command, read_file, write_file, list_directory
 ```
 
@@ -32,6 +33,7 @@ gemini-mcp-bridge-server install-service
 It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Logs/gemini-mcp-bridge-server.log`), a systemd user service on Linux (log: `journalctl --user -u gemini-mcp-bridge-server`), a hidden script in the Startup folder on Windows (log: `%LOCALAPPDATA%\gemini-mcp-bridge-server\server.log`). No administrator rights are needed. `--port`, `--no-shell` and `--no-files` given here are saved in the config.
 
 - `gemini-mcp-bridge-server token` shows the URL and the token again (the service does not write the token into its log).
+- `gemini-mcp-bridge-server perf-log` shows the extension's performance log (below).
 - `gemini-mcp-bridge-server uninstall-service` stops it and removes it.
 - The service runs the Node.js that installed it, with the `PATH` of the terminal you installed it from (so that `npx` and your tools are found): after removing that Node.js version (with nvm, say) or changing your `PATH`, run `install-service` again.
 
@@ -50,7 +52,7 @@ Paths may be absolute, start with `~`, or be relative to your home folder. The s
 
 ```
 gemini-mcp-bridge-server [--port <n>] [--config <file>] [--no-shell] [--no-files] [--new-token]
-gemini-mcp-bridge-server token | install-service | uninstall-service
+gemini-mcp-bridge-server token | perf-log | install-service | uninstall-service
 ```
 
 The config file is `~/.config/gemini-mcp-bridge-server/config.json` (on Windows `%APPDATA%\gemini-mcp-bridge-server\config.json`). Only your user can read it.
@@ -70,6 +72,12 @@ The config file is `~/.config/gemini-mcp-bridge-server/config.json` (on Windows 
 The server writes this file only on the first start and with a new token; keys it does not know stay in it. A wrong value (a port that is not a number, a server without `command` or `url`) stops the start with a message that names it.
 
 `mcpServers` has the shape other MCP clients use, so an existing list can be copied in: stdio servers (`command`, `args`, `env`, `cwd`) and Streamable HTTP servers (`url`, `headers`). Their tools appear with the server's name in front, as `playwright__browser_navigate`. `"disabled": true` leaves one out. A server that stops is started again at its next call (after a short wait that grows while it keeps failing).
+
+## Performance log
+
+When the extension's *Performance log* option is on (off by default; it is for finding out why a page is slow), the extension sends its lines to this server every ten seconds, and the server appends them to `perf.log` next to the config file. `gemini-mcp-bridge-server perf-log` shows the file. Past 1 MB it becomes `perf.log.1` and a new one begins. Only your user can read it.
+
+The lines say which clicks, keys and frames took long on the page and how much of that time was the extension's own work, and every minute how much time the extension took. They carry names and numbers only, no text of the page. The same lines are on the extension's options page, with **Copy**.
 
 ## Safety
 

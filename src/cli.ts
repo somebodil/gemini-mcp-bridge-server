@@ -8,6 +8,7 @@ import { stopAllCommands } from "./builtin.ts";
 import { defaultConfigPath, loadConfig, saveConfig, validPort } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
+import { perfLogPath, showPerf } from "./perf.ts";
 import { fromNpxCache, install, logPath, NAME, uninstall } from "./service.ts";
 
 const HELP = `${NAME} ${VERSION}: your computer's tools for Gemini on the web, through the Gemini MCP Bridge extension
@@ -15,6 +16,7 @@ const HELP = `${NAME} ${VERSION}: your computer's tools for Gemini on the web, t
 Usage:
   ${NAME} [options]                     Start the server
   ${NAME} token [--config <file>]       Show the URL and the token for the extension
+  ${NAME} perf-log [--config <file>]    Show the extension's performance log (an option of the extension)
   ${NAME} install-service [options]     Start the server whenever you log in (and now)
   ${NAME} uninstall-service             Stop doing that
 
@@ -64,6 +66,7 @@ async function main(): Promise<void> {
     const { config } = loadConfig(path);
     return void process.stdout.write(`URL:   http://127.0.0.1:${config.port}/mcp\nToken: ${config.token}\n`);
   }
+  if (command === "perf-log") return void process.stdout.write(showPerf(perfLogPath(path)));
   if (command === "uninstall-service") return void process.stdout.write(`${uninstall().join("\n")}\n`);
   if (command === "install-service") {
     const script = realpathSync(fileURLToPath(import.meta.url));
@@ -88,7 +91,8 @@ async function main(): Promise<void> {
   const log = (line: string) => process.stderr.write(`${stamp()} ${line}\n`);
   const hub = new Hub({ ...config, tools }, log);
   // the port first: a second instance learns at once that it is taken
-  const http = await listen(hub, { port: listenPort, token: config.token, log }).catch(async (e: NodeJS.ErrnoException) => {
+  const perfLog = perfLogPath(path);
+  const http = await listen(hub, { port: listenPort, token: config.token, log, perfLog }).catch(async (e: NodeJS.ErrnoException) => {
     await hub.close();
     if (e.code === "EADDRINUSE") throw new Error(`Port ${listenPort} is in use: is ${NAME} already running (perhaps as a service)? Another port: --port <n>`, { cause: e });
     throw e;
@@ -115,6 +119,7 @@ async function main(): Promise<void> {
     `  URL:    http://127.0.0.1:${listenPort}/mcp`,
     `  Token:  ${token}`,
     `  Config: ${path}${created ? " (new)" : ""}`,
+    `  Perf:   ${perfLog} (when the extension's performance log is on)`,
     `  Tools:  ${names.length ? names.join(", ") : "none"}`,
     ...hub.notRunning().map((s) => `  Not running yet: ${s.name}${s.error ? ` (${s.error})` : " (starting)"}`),
     "",

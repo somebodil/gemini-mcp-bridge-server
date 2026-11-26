@@ -12,6 +12,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig, type Config } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
+import { appendPerf, cleanLines } from "./perf.ts";
 
 const TOKEN = "test-token-0123456789abcdef";
 const WIN = process.platform === "win32";
@@ -314,6 +315,54 @@ describe("HTTP", () => {
     assert.equal((await post({ ...auth, origin: "chrome-extension://abcdefghijklmnop" })).status, 200);
   });
 
+  it("appends the extension's performance log to its file, with the same checks", async () => {
+    const file = join(dir, "perf.log");
+    const server = await listen(hub, { port: 0, token: TOKEN, perfLog: file });
+    try {
+      const to = `http://127.0.0.1:${(server.address() as AddressInfo).port}/perf`;
+      const send = (headers: Record<string, string>, body: string) => fetch(to, { method: "POST", headers: { "content-type": "text/plain; charset=utf-8", ...headers }, body });
+      assert.equal((await send({}, "x")).status, 401);
+      assert.equal((await send({ ...auth, origin: "https://evil.example" }, "x")).status, 403);
+      assert.equal((await fetch(to, { headers: auth })).status, 405);
+      assert.equal(existsSync(file), false);
+      const r = await send({ ...auth, origin: "chrome-extension://abcdefghijklmnop" }, "one\ntwo\u001b[2J\u202ethree\r\n\n");
+      assert.equal(r.status, 200);
+      assert.equal(await r.text(), file, "it says where the file is");
+      assert.equal((await send(auth, "four")).status, 200);
+      assert.equal(readFileSync(file, "utf8"), "one\ntwo [2J three\nfour\n");
+      if (!WIN) assert.equal(statSync(file).mode & 0o777, 0o600);
+      assert.equal((await send(auth, "x".repeat(70 * 1024))).status, 413);
+      assert.equal(readFileSync(file, "utf8").split("\n").length, 4, "nothing of a refused body was written");
+      // a sender that gives up in the middle of its body does not bring the server down
+      await new Promise<void>((resolve) => {
+        const req = request({ host: "127.0.0.1", port: new URL(to).port, path: "/perf", method: "POST", headers: { ...auth, "content-length": "50000" } });
+        req.on("error", () => resolve());
+        req.write("half a body");
+        setTimeout(() => {
+          req.destroy();
+          resolve();
+        }, 100);
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      assert.equal((await send(auth, "five")).status, 200);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+    // a server started without a file has no /perf
+    assert.equal((await fetch(url.replace("/mcp", "/perf"), { method: "POST", headers: auth, body: "x" })).status, 404);
+  });
+
+  it("moves a full performance log aside, and keeps lines short", () => {
+    const file = join(dir, "perf-full.log");
+    appendPerf(file, ["a".repeat(100)], 50);
+    appendPerf(file, ["b"], 50);
+    assert.equal(readFileSync(`${file}.1`, "utf8"), `${"a".repeat(100)}\n`);
+    assert.equal(readFileSync(file, "utf8"), "b\n");
+    assert.deepEqual(cleanLines(`${"c".repeat(3000)}\n  \n`), ["c".repeat(2000)]);
+    assert.equal(cleanLines("x\n".repeat(600)).length, 500);
+  });
+
   it("stops a command when the extension drops the request", async () => {
     const marker = join(dir, "marker.txt");
     const js = `setTimeout(function(){require('fs').writeFileSync(process.argv[1],'x')},1500)`;
@@ -400,6 +449,15 @@ describe("command line", () => {
   it("prints its version and help", async () => {
     assert.equal((await run(["--version"])).out.trim(), VERSION);
     assert.match((await run(["--help"])).out, /Usage:[\s\S]*install-service/);
+  });
+
+  it("shows the performance log, or how to fill it", async () => {
+    const perf = join(dir, "cli", "perf.log");
+    mkdirSync(join(dir, "cli"), { recursive: true });
+    assert.match((await run(["perf-log", "--config", path])).out, /Nothing in .*perf\.log yet\. Turn on "Write the performance log"/);
+    writeFileSync(perf, "a line\n");
+    assert.equal((await run(["perf-log", "--config", path])).out, "a line\n");
+    rmSync(perf);
   });
 
   it("shows the URL and token of the config", async () => {
