@@ -83,7 +83,16 @@ describe("tools", () => {
     assert.equal(c.getServerVersion()?.name, "gemini-mcp-bridge-server");
     assert.equal(c.getServerVersion()?.version, VERSION);
     assert.match(c.getInstructions() ?? "", /Home folder: .*Relative paths in the tools start there/);
-    assert.match(c.getInstructions() ?? "", /run_command uses /);
+    if (WIN) assert.match(c.getInstructions() ?? "", /run_command uses /);
+    else {
+      // Gemini puts Python into "command" unless it is told plainly not to
+      assert.match(c.getInstructions() ?? "", /run_command runs its "command" with \S*bash -c, so "command" must be bash syntax only/);
+      assert.match(c.getInstructions() ?? "", /Never put Python or the code of any other language into it\./);
+      assert.match(c.getInstructions() ?? "", /save it to a file with write_file first, then run that file/);
+      const run = (await c.listTools()).tools.find((t) => t.name === "run_command");
+      assert.match(run?.description ?? "", /Bash syntax only: no Python or other code in it\./);
+      assert.match(JSON.stringify(run?.inputSchema), /in bash syntax only/);
+    }
     assert.match(c.getInstructions() ?? "", /Tools named up__\*: Adds numbers\./);
     const names = (await c.listTools()).tools.map((t) => t.name);
     assert.deepEqual(names, ["run_command", "read_file", "write_file", "list_directory", "up__add"]);
@@ -101,6 +110,24 @@ describe("tools", () => {
     assert.equal(r.isError, true);
     assert.match(textOf(r), /Unknown tool: run_command/);
     assert.doesNotMatch(new Hub(config({ tools: { shell: false, files: false }, mcpServers: {} })).instructions(), /Relative paths/);
+    // without write_file there is nothing to save code with
+    assert.doesNotMatch(new Hub(config({ tools: { shell: true, files: false }, mcpServers: {} })).instructions(), /write_file/);
+  });
+
+  it("logs why a call failed, not only that it did", async () => {
+    const lines: string[] = [];
+    const h = new Hub(config({ mcpServers: {} }), (line) => lines.push(line));
+    await h.callTool("nope__x", { a: 1 });
+    await h.callTool("read_file", { path: join(dir, "missing.txt") });
+    await h.callTool("read_file", { path: join(dir, "hello.txt") });
+    assert.match(lines[0] ?? "", /^call nope__x \{"a":1\} → error: Unknown tool: nope__x \(\d+ ms\)$/);
+    assert.match(lines[1] ?? "", /^call read_file .* → error: .*ENOENT.* \(\d+ ms\)$/);
+    assert.match(lines[2] ?? "", /^call read_file .* → ok \(\d+ ms\)$/);
+    await h.callTool("run_command", { command: node("process.stdout.write('a\\n'.repeat(500));setTimeout(function(){},5000)"), timeout_seconds: 1 });
+    const timedOut = lines[3] ?? "";
+    assert.match(timedOut, /→ error: Stopped after/);
+    assert.doesNotMatch(timedOut, /\n/, "one line");
+    assert.ok(timedOut.length < 600, "cut short");
   });
 
   it("reads, writes and lists files", async () => {
@@ -157,6 +184,49 @@ describe("tools", () => {
     const long = await call("run_command", { command: node("process.stdout.write('x'.repeat(250000))") });
     assert.match(long.text, /\.\.\.\[output cut at 200000 of 250000 characters\]$/);
     assert.match((await call("run_command", { command: "echo hi", cwd: join(dir, "nope") })).text, /The folder .*nope does not exist\./);
+  });
+
+  it("runs bash, whatever $SHELL and /bin/sh are", { skip: WIN && "cmd.exe on Windows" }, async () => {
+    // all of these fail in dash (Debian's /bin/sh), and some in zsh
+    const cases: [string, string][] = [
+      ["[[ 1 == 1 ]] && echo ok", "ok"],
+      ["echo $'a\\tb'", "a\tb"],
+      ["echo -e 'x\\ty'", "x\ty"],
+      ["echo {a,b}.txt", "a.txt b.txt"],
+      ["cat <(echo hi)", "hi"],
+      ["arr=(one two three); echo \"${arr[1]} ${#arr[@]}\"", "two 3"],
+      ["s=hello; echo ${s^^} ${s:1:3}", "HELLO ell"],
+      ["shopt -s extglob; echo ${BASH_VERSION%%.*} | grep -cE '^[0-9]+$'", "1"],
+    ];
+    for (const [command, out] of cases) {
+      const r = await call("run_command", { command, cwd: dir });
+      assert.equal(r.text, `exit code: 0\n--- stdout ---\n${out}`, command);
+    }
+  });
+
+  it("passes every character of a command through JSON unchanged", { skip: WIN && "cmd.exe quotes differently" }, async () => {
+    // what Gemini copies from a terminal: backslashes, quotes, $, backticks, newlines and tabs, non-ASCII
+    const payloads = [
+      String.raw`grep -E '\bfoo\b|\d+\s*\w' file.txt`,
+      String.raw`sed 's/\(.*\)/[\1]/p'`,
+      String.raw`printf 'a\tb\n' and echo $'line1\nline2'`,
+      String.raw`C:\Users\new\table\file.txt and \\server\share`,
+      String.raw`find . -name '*.log' -exec rm {} \;`,
+      String.raw`say "hi" and 'bye' and \"escaped\"`,
+      "$HOME $(whoami) `id` ${PATH} $1 $@ !! ^x^y",
+      "a real\ttab, a real\nnewline\r\nand CRLF",
+      "100% %s %d %%",
+      "한글 ✓ 😀 é \\u00e9 \\x41 \u202e\u200b",
+      `{"mcp_call": {"tool": "x", "arguments": {"q": "in \\"json\\""}}}`,
+      "; && || | > < & * ? [a-z] # ~",
+      "trailing backslash \\",
+      "",
+    ];
+    const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+    for (const p of payloads) {
+      const r = await call("run_command", { command: `printf '%s' ${quote(p)}`, cwd: dir });
+      assert.equal(r.text, p ? `exit code: 0\n--- stdout ---\n${p}` : "exit code: 0\n(no output)", p);
+    }
   });
 
   it("passes calls through to the stdio server", async () => {
@@ -309,6 +379,18 @@ describe("HTTP", () => {
     const home = await fetch(url.replace("/mcp", "/"));
     assert.equal(home.status, 200);
     assert.match(await home.text(), /is running/);
+  });
+
+  it("takes JSON written by hand, with every kind of escape", { skip: WIN && "cmd.exe quotes differently" }, async () => {
+    // the body as text, not JSON.stringify: \\ \" \/ \t \n and \u escapes, a surrogate pair, raw UTF-8
+    const command = String.raw`printf '%s|' 'a\\b' 'q\"q' 'x\/y' $'t\\tn' 'u\tv' 'l1\nl2' '\u00e9\ud83d\ude00' '한'`;
+    const body = `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"${command}"}}}`;
+    const res = await post(auth, body);
+    assert.equal(res.status, 200);
+    const raw = await res.text();
+    const json = raw.includes("data:") ? raw.split("\n").find((l) => l.startsWith("data:"))?.slice(5) : raw;
+    const result = (JSON.parse(json ?? "") as { result: CallToolResult }).result;
+    assert.equal(textOf(result), 'exit code: 0\n--- stdout ---\na\\b|q"q|x/y|t\tn|u\tv|l1\nl2|é😀|한|');
   });
 
   it("accepts the extension's origin", async () => {

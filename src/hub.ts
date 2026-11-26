@@ -186,7 +186,9 @@ export class Hub {
     } catch (e) {
       result = { content: [{ type: "text", text: e instanceof Error ? e.message : String(e) }], isError: true };
     }
-    this.log(`call ${name} ${short(args)} → ${result.isError ? "error" : "ok"} (${Date.now() - started} ms)`);
+    const ms = Date.now() - started;
+    // a failure shows its message too, so the console tells why without opening the page
+    this.log(`call ${name} ${short(args)} → ${result.isError ? `error: ${errorText(result)}` : "ok"} (${ms} ms)`);
     return result;
   }
 
@@ -206,4 +208,16 @@ export class Hub {
 function short(args: Record<string, unknown>): string {
   const s = JSON.stringify(args);
   return s.length > 160 ? `${s.slice(0, 157)}...` : s;
+}
+
+/** The text of an error result on one line, cut to 300 characters. */
+function errorText(result: CallToolResult): string {
+  const parts = Array.isArray(result.content) ? result.content : [];
+  const s = parts
+    .map((c) => (c.type === "text" ? c.text : `[${c.type}]`))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!s) return "(no message)";
+  return s.length > 300 ? `${s.slice(0, 297)}...` : s;
 }

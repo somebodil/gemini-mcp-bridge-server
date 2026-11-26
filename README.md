@@ -41,7 +41,7 @@ It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Lo
 
 | Tool | What it does |
 |---|---|
-| `run_command` | Runs a command in your shell (`$SHELL -c`, `cmd.exe` on Windows), with a time limit (60 s by default, at most 600 s). Returns the exit code, stdout and stderr. |
+| `run_command` | Runs a command line with `bash -c` (`cmd.exe` on Windows; `$SHELL` only when there is no bash), with a time limit (60 s by default, at most 600 s). Returns the exit code, stdout and stderr. Gemini is told to write bash syntax only, and to save code in another language with `write_file` and run that file. |
 | `read_file` | Reads a text file, whole or some of its lines. |
 | `write_file` | Writes a text file, or adds to its end. Missing folders are created. |
 | `list_directory` | Lists a folder (at most 1000 entries); links show as what they point to. |

@@ -1,16 +1,40 @@
 // The tools the server has by itself: a shell and the file system of this computer.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { accessSync, constants } from "node:fs";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { arch, homedir, platform, release } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 const OUTPUT_LIMIT = 200_000;
 const READ_LIMIT = 4 * 1024 * 1024;
 const LIST_LIMIT = 1000;
 const WIN = process.platform === "win32";
-const SHELL = WIN ? process.env.ComSpec || "cmd.exe" : process.env.SHELL || "/bin/sh";
+
+/**
+ * bash on the PATH, or in its usual places. Gemini is told to write bash, and a command a user copies from a
+ * terminal is bash too: the user's $SHELL may be zsh (macOS), and /bin/sh may be dash (Debian), where $'...',
+ * [[ ]], {a,b} and <(...) do not work. A service gets no $SHELL at all.
+ */
+function findBash(): string | undefined {
+  const dirs = [...(process.env.PATH ?? "").split(delimiter), "/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const path = join(dir, "bash");
+    try {
+      accessSync(path, constants.X_OK);
+      return path;
+    } catch {
+      // not here
+    }
+  }
+  return undefined;
+}
+
+const SHELL = WIN ? process.env.ComSpec || "cmd.exe" : (findBash() ?? (process.env.SHELL || "/bin/sh"));
+/** True when run_command runs bash: then Gemini is told to write bash syntax only. */
+export const RUNS_BASH = !WIN && /(^|\/)bash$/.test(SHELL);
 
 type Switches = { shell: boolean; files: boolean };
 
@@ -19,7 +43,13 @@ export function systemNote(tools: Switches): string {
   const os = { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform() as string] ?? platform();
   const lines = [`Computer: ${os} ${release()} (${arch()}).`, `Home folder: ${homedir()}.`];
   if (tools.files || tools.shell) lines[1] += " Relative paths in the tools start there; ~ works too.";
-  if (tools.shell) lines.push(`run_command uses ${SHELL}.`);
+  if (tools.shell && RUNS_BASH) {
+    lines.push(
+      `run_command runs its "command" with ${SHELL} -c, so "command" must be bash syntax only: a command line as typed in a bash terminal. ` +
+        "Never put Python or the code of any other language into it.",
+    );
+    if (tools.files) lines.push("To run code in another language, save it to a file with write_file first, then run that file with run_command (for example: python3 /tmp/script.py).");
+  } else if (tools.shell) lines.push(`run_command uses ${SHELL}.`);
   return lines.join("\n");
 }
 
@@ -28,11 +58,13 @@ export function builtinTools(tools: Switches): Tool[] {
   if (tools.shell)
     list.push({
       name: "run_command",
-      description: `Run a command in the shell of the user's computer (${SHELL}) and return its exit code and output.`,
+      description: RUNS_BASH
+        ? `Run one bash command line on the user's computer (${SHELL} -c) and return its exit code and output. Bash syntax only: no Python or other code in it.`
+        : `Run a command in the shell of the user's computer (${SHELL}) and return its exit code and output.`,
       inputSchema: {
         type: "object",
         properties: {
-          command: { type: "string", description: "The command line." },
+          command: { type: "string", description: RUNS_BASH ? "The command line, in bash syntax only." : "The command line." },
           cwd: { type: "string", description: "Folder to run in. Default: the home folder." },
           timeout_seconds: { type: "number", description: "Stop the command after this long. Default 60, at most 600." },
         },
