@@ -9,6 +9,7 @@ import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { RUNS_BASH } from "./builtin.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { listen } from "./http.ts";
 import { Hub, VERSION } from "./hub.ts";
@@ -98,15 +99,20 @@ describe("tools", () => {
       const major = Number(execFileSync("bash", ["-c", "echo ${BASH_VERSINFO[0]}"], { encoding: "utf8" }).trim());
       if (major < 4) assert.match(c.getInstructions() ?? "", /This bash is older than 4: \$\{var\^\^\}/);
       else assert.doesNotMatch(c.getInstructions() ?? "", /older than 4/);
-      assert.match(c.getInstructions() ?? "", /Never put Python or the code of any other language into it\./);
-      assert.match(c.getInstructions() ?? "", /save it to a file with write_file first, then run that file/);
+      assert.match(c.getInstructions() ?? "", /Never run Python or the code of any other language as bash commands\./);
+      // a file is written with a here-document, and runs in the same command: there is no write_file
+      assert.match(
+        c.getInstructions() ?? "",
+        /run_command also writes files: a here-document .*\nmkdir -p \/tmp\/job && cat > \/tmp\/job\/main\.py <<'GMB_EOF' && python3 \/tmp\/job\/main\.py\nprint\("hello"\)\nGMB_EOF/,
+      );
+      assert.doesNotMatch(c.getInstructions() ?? "", /write_file/);
       const run = (await c.listTools()).tools.find((t) => t.name === "run_command");
-      assert.match(run?.description ?? "", /Bash syntax only: no Python or other code in it\./);
+      assert.match(run?.description ?? "", /Bash syntax only: code of another language goes into a file with a here-document/);
       assert.match(JSON.stringify(run?.inputSchema), /in bash syntax only/);
     }
     assert.match(c.getInstructions() ?? "", /Tools named up__\*: Adds numbers\./);
     const names = (await c.listTools()).tools.map((t) => t.name);
-    assert.deepEqual(names, ["run_command", "read_file", "write_file", "list_directory", "up__add"]);
+    assert.deepEqual(names, ["run_command", "read_file", ...(RUNS_BASH ? [] : ["write_file"]), "list_directory", "up__add"]);
     await c.close();
   });
 
@@ -121,8 +127,10 @@ describe("tools", () => {
     assert.equal(r.isError, true);
     assert.match(textOf(r), /Unknown tool: run_command/);
     assert.doesNotMatch(new Hub(config({ tools: { shell: false, files: false }, mcpServers: {} })).instructions(), /Relative paths/);
-    // without write_file there is nothing to save code with
-    assert.doesNotMatch(new Hub(config({ tools: { shell: true, files: false }, mcpServers: {} })).instructions(), /write_file/);
+    // write_file only where run_command cannot write a file: without the shell (above), or without bash (cmd.exe)
+    const names = (tools: { shell: boolean; files: boolean }) => new Hub(config({ tools, mcpServers: {} })).listTools().map((t) => t.name);
+    assert.equal(names({ shell: true, files: true }).includes("write_file"), !RUNS_BASH);
+    assert.deepEqual(names({ shell: true, files: false }), ["run_command"]);
   });
 
   it("logs each step of a call, and why it failed as an error", async () => {
@@ -134,8 +142,10 @@ describe("tools", () => {
     await h.callTool("read_file", { path: join(dir, "hello.txt") });
     const file = join(dir, "logged", "out.txt");
     const wrote = `Wrote 5 bytes to ${file}.`;
-    await h.callTool("write_file", { path: file, content: "hello" });
-    await h.callTool("write_file", { path: file, content: { not: "a string" } });
+    // write_file is there without the shell
+    const files = new Hub(config({ tools: { shell: false, files: true }, mcpServers: {} }), log);
+    await files.callTool("write_file", { path: file, content: "hello" });
+    await files.callTool("write_file", { path: file, content: { not: "a string" } });
     const got = lines.splice(0).map((l) => l.replace(/\(\d+ ms\)/, "(N ms)"));
     assert.equal(got[0], `INFO reading ${join(dir, "missing.txt")}`);
     assert.match(got[1] ?? "", /^ERROR read_file failed \(N ms\): ENOENT/);
@@ -160,9 +170,37 @@ describe("tools", () => {
     assert.match((await call("list_directory", { path: dir })).text, /\[FILE\] hello\.txt \(18 bytes\)/);
     assert.equal((await call("read_file", { path: join(dir, "hello.txt"), offset: 2, limit: 1 })).text, "[lines 2-2 of 3]\nline2");
     assert.equal((await call("read_file", { path: join(dir, "hello.txt"), offset: "3" })).text, "[lines 3-3 of 3]\nline3");
-    await call("write_file", { path: join(dir, "sub", "new.txt"), content: "hi" });
-    await call("write_file", { path: join(dir, "sub", "new.txt"), content: "!", append: true });
+    // write_file is there without the shell
+    const files = new Hub(config({ tools: { shell: false, files: true }, mcpServers: {} }));
+    await files.callTool("write_file", { path: join(dir, "sub", "new.txt"), content: "hi" });
+    await files.callTool("write_file", { path: join(dir, "sub", "new.txt"), content: "!", append: true });
     assert.equal(readFileSync(join(dir, "sub", "new.txt"), "utf8"), "hi!");
+  });
+
+  it("writes a file with a here-document and runs it in the same command", { skip: WIN && "cmd.exe" }, async () => {
+    const file = join(dir, "heredoc", "main.js");
+    const code = 'const home = "$HOME `whoami` \\d+ \\n";\nconsole.log(home.length, process.argv.length);\n';
+    const r = await call("run_command", { command: `mkdir -p ${join(dir, "heredoc")} && cat > ${file} <<'GMB_EOF' && "${process.execPath}" ${file}\n${code}GMB_EOF` });
+    assert.equal(readFileSync(file, "utf8"), code);
+    assert.match(r.text, /^exit code: 0\n--- stdout ---\n19 2$/);
+  });
+
+  it("runs a command line too long for one argument from a script file", { skip: WIN && "cmd.exe" }, async () => {
+    const { log, lines } = capture();
+    const h = new Hub(config({ mcpServers: {} }), log);
+    const file = join(dir, "long.txt");
+    // more than Linux takes in one argument (128 KiB)
+    const content = `${"x".repeat(99)}\n`.repeat(2000);
+    const r = await h.callTool("run_command", { command: `cat > ${file} <<'GMB_EOF' && wc -c < ${file}\n${content}GMB_EOF` });
+    assert.match(textOf(r), /^exit code: 0\n--- stdout ---\n\s*200000$/);
+    assert.equal(readFileSync(file, "utf8"), content);
+    const said = lines.find((l) => l.includes("runs from")) ?? "";
+    assert.match(said, /^INFO the command line has \d+ bytes, more than one argument may hold: it runs from .*command\.sh$/);
+    // and is gone afterwards
+    const script = said.replace(/^.* runs from /, "");
+    const until = Date.now() + 2000;
+    while (existsSync(script) && Date.now() < until) await new Promise((res) => setTimeout(res, 20));
+    assert.equal(existsSync(script), false);
   });
 
   it("explains what it cannot read", async () => {
@@ -307,7 +345,7 @@ describe("hard cases", () => {
         const started = Date.now();
         assert.deepEqual(
           h.listTools().map((t) => t.name),
-          ["run_command", "read_file", "write_file", "list_directory"],
+          ["run_command", "read_file", ...(RUNS_BASH ? [] : ["write_file"]), "list_directory"],
         );
         assert.ok(Date.now() - started < 1000);
       },
@@ -389,23 +427,21 @@ describe("the log", () => {
     const rpc = (method: string, params: unknown) => JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
     const of = (n: number) => lines.filter((l) => l.includes(` #${n} `)).map((l) => l.replace(/\d+ ms/g, "N ms"));
     try {
-      const file = join(dir, "via-http.txt");
-      assert.equal((await post(rpc("tools/call", { name: "write_file", arguments: { path: file, content: "hi" } }))).status, 200);
-      const body = rpc("tools/call", { name: "write_file", arguments: { path: file, content: "hi" } });
-      const wrote = `Wrote 2 bytes to ${file}.`;
+      const file = join(dir, "hello.txt");
+      const body = rpc("tools/call", { name: "read_file", arguments: { path: file } });
+      assert.equal((await post(body)).status, 200);
       const one = of(1);
-      assert.equal(one.length, 5, one.join("\n"));
-      assert.deepEqual(one.slice(0, 4), [
-        `INFO #1 ← tools/call write_file {"path":${JSON.stringify(file)},"content":"hi"} · ${Buffer.byteLength(body)} bytes from 127.0.0.1`,
-        `INFO #1 creating the folders of ${file} if missing`,
-        `INFO #1 writing 2 bytes to ${file}`,
-        `INFO #1 write_file done (N ms): ${wrote.length} characters: ${wrote}`,
+      assert.equal(one.length, 4, one.join("\n"));
+      assert.deepEqual(one.slice(0, 3), [
+        `INFO #1 ← tools/call read_file {"path":${JSON.stringify(file)}} · ${Buffer.byteLength(body)} bytes from 127.0.0.1`,
+        `INFO #1 reading ${file}`,
+        "INFO #1 read_file done (N ms): 18 characters: line1 line2 line3",
       ]);
-      assert.match(one[4] ?? "", /^INFO #1 → HTTP 200, \d+ bytes, N ms$/);
+      assert.match(one[3] ?? "", /^INFO #1 → HTTP 200, \d+ bytes, N ms$/);
 
       // what goes wrong is an error at once: a failed tool, a body that is not JSON, a method that is not there
-      await post(rpc("tools/call", { name: "write_file", arguments: { path: file } }));
-      assert.match(of(2).join("\n"), /ERROR #2 write_file failed \(N ms\): "content" must be a string; it was nothing\./);
+      await post(rpc("tools/call", { name: "read_file", arguments: {} }));
+      assert.match(of(2).join("\n"), /ERROR #2 read_file failed \(N ms\): "path" must be a string; it was nothing\./);
       assert.equal((await post("{not json")).status, 400);
       assert.match(of(3)[0] ?? "", /^ERROR #3 the body is not JSON \(.*\): \{not json$/);
       await post(rpc("no/such", {}));

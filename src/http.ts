@@ -176,7 +176,7 @@ async function mcpRequest(hub: Hub, req: IncomingMessage, res: ServerResponse, l
     const errors = bytes <= REPLY_KEEP && text.includes('"error"') ? rpcErrors(text) : [];
     const what = `→ HTTP ${res.statusCode}, ${bytes} bytes, ${ms()} ms`;
     if (errors.length) log.error(`${what}: JSON-RPC error ${errors.join("; ")}`);
-    else if (res.statusCode >= 400) log.error(what);
+    else if (res.statusCode >= 400) log.error(`${what}${text ? `: ${oneLine(text, 300)}` : ""}`);
     else log.info(what);
   });
   // closing the server closes the transport, which aborts a call still running

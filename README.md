@@ -11,12 +11,12 @@ npx gemini-mcp-bridge-server
 Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-gemini-mcp-bridge-server 0.5.0
+gemini-mcp-bridge-server 0.6.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
   Perf:   /home/you/.config/gemini-mcp-bridge-server/perf.log (when the extension's performance log is on)
-  Tools:  run_command, read_file, write_file, list_directory
+  Tools:  run_command, read_file, list_directory
 ```
 
 Leave the window open while you use Gemini. Every request shows up there as it comes (see *Log* below).
@@ -41,10 +41,10 @@ It starts at once and at every login: a LaunchAgent on macOS (log: `~/Library/Lo
 
 | Tool | What it does |
 |---|---|
-| `run_command` | Runs a command line with `bash -c` (`cmd.exe` on Windows; `$SHELL` only when there is no bash), with a time limit (60 s by default, at most 600 s). Returns the exit code, stdout and stderr. Gemini is told to write bash syntax only, and to save code in another language with `write_file` and run that file. |
+| `run_command` | Runs a command line with `bash -c` (`cmd.exe` on Windows; `$SHELL` only when there is no bash), with a time limit (60 s by default, at most 600 s). Returns the exit code, stdout and stderr. Gemini is told to write bash syntax only. It writes files with it too: a here-document (`cat > FILE <<'GMB_EOF'` ... `GMB_EOF`) writes each line as it is, and code in another language goes into a file this way and runs in the same command, one round instead of two. A command line over 100 KB runs from a temporary script file (Linux takes at most 128 KiB in one argument). |
 | `read_file` | Reads a text file, whole or some of its lines. |
-| `write_file` | Writes a text file, or adds to its end. Missing folders are created. |
 | `list_directory` | Lists a folder (at most 1000 entries); links show as what they point to. |
+| `write_file` | Only where `run_command` cannot write a file: without bash (`cmd.exe` on Windows) and with `--no-shell`. Writes a text file, or adds to its end. Missing folders are created. |
 
 Paths may be absolute, start with `~`, or be relative to your home folder. The server also tells Gemini, in its MCP instructions, your operating system, your home folder and your shell, so that Gemini writes paths and commands that work.
 
@@ -75,17 +75,17 @@ The server writes this file only on the first start and with a new token; keys i
 
 ## Log
 
-While it runs, the server writes to stdout (the service: to its log, above) each request as it comes, each step of the work, and the reply as it goes out, all under the number of the request. Something going wrong is a `WARN` or `ERROR` line at once: a tool that failed (with why), wrong arguments, a body that is not JSON, a refused request, a file tool still running after 5 seconds, a call the extension gave up on, a reply that had nowhere to go.
+While it runs, the server writes to stdout (the service: to its log, above) each request as it comes, each step of the work, and the reply as it goes out, all under the number of the request. Something going wrong is a `WARN` or `ERROR` line at once: a tool that failed (with why), wrong arguments, a body that is not JSON (HTTP 400), any reply with an error status (with what it said), a refused request, a file tool still running after 5 seconds, a call the extension gave up on, a reply that had nowhere to go.
 
 ```
-13:29:16.080 INFO  #2 ← tools/call write_file {"path":"/home/you/notes/a.txt","content":"hello\nworld"} · 147 bytes from 127.0.0.1
-13:29:16.081 INFO  #2 creating the folders of /home/you/notes/a.txt if missing
-13:29:16.082 INFO  #2 writing 11 bytes to /home/you/notes/a.txt
-13:29:16.082 INFO  #2 write_file done (1 ms): 40 characters: Wrote 11 bytes to /home/you/notes/a.txt.
-13:29:16.083 INFO  #2 → HTTP 200, 113 bytes, 4 ms
-13:29:16.091 INFO  #3 ← tools/call write_file {"path":"/home/you/notes/b.txt"} · 122 bytes from 127.0.0.1
-13:29:16.091 ERROR #3 write_file failed (0 ms): "content" must be a string; it was nothing.
-13:29:17.143 ERROR #8 the connection closed after 1011 ms, before the reply was sent: the extension gave up or went away
+14:33:50.923 INFO  #1 ← tools/call run_command {"command":"mkdir -p /tmp/job && cat > /tmp/job/main.py <<'GMB_EOF' && python3 /tmp/job/main.py\nprint(\"hello\")\nGMB_EOF"} · 215 bytes from 127.0.0.1
+14:33:50.929 INFO  #1 running with /bin/bash in /home/you, time limit 60 s: mkdir -p /tmp/job && cat > /tmp/job/main.py <<'GMB_EOF' && python3 /tmp/job/main.py print("hello") GMB_EOF
+14:33:50.930 INFO  #1 started: process 49314
+14:33:51.084 INFO  #1 run_command done (155 ms): 33 characters: exit code: 0 --- stdout --- hello
+14:33:51.086 INFO  #1 → HTTP 200, 108 bytes, 164 ms
+14:33:51.090 INFO  #2 ← tools/call read_file {} · 91 bytes from 127.0.0.1
+14:33:51.090 ERROR #2 read_file failed (0 ms): "path" must be a string; it was nothing.
+14:33:52.143 ERROR #8 the connection closed after 1011 ms, before the reply was sent: the extension gave up or went away
 ```
 
 A string argument over 200 characters (the content of a file) shows as its start and its length; a result, as its length and its start.
@@ -103,7 +103,7 @@ The lines say which clicks, keys and frames took long on the page and how much o
   - It has no `Origin`, or a `chrome-extension://` one. Web pages always send their own `Origin`.
 - Whoever has the token can run commands as you. Keep it like a password. `--new-token` replaces it.
 - The token is the only lock, and it travels unencrypted. On a network you do not trust (a café, a shared office), close the port to other computers with the firewall of your system, or send it through an SSH tunnel.
-- The extension asks before each call by default. What Gemini writes can come from a web page or a document it read ("prompt injection"): keep `run_command` and `write_file` on *Ask* in the extension unless you watch closely. `--no-shell` and `--no-files` turn the tools off on this side.
+- The extension asks before each call by default. What Gemini writes can come from a web page or a document it read ("prompt injection"): keep `run_command` (and `write_file`, where it is there) on *Ask* in the extension unless you watch closely. `--no-shell` and `--no-files` turn the tools off on this side.
 
 ## Development
 

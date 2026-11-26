@@ -25,7 +25,7 @@ Options:
   --port <n>       Port (default: from the config, 7341)
   --config <file>  Config file (default: ${defaultConfigPath()})
   --no-shell       Without the run_command tool
-  --no-files       Without read_file, write_file, list_directory
+  --no-files       Without read_file, list_directory (and write_file, there without bash or the shell)
   --new-token      Make a new token (the extension then needs the new one)
   -h, --help       This text
   -v, --version    The version

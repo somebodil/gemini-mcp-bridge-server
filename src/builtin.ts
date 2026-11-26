@@ -2,16 +2,20 @@
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants } from "node:fs";
-import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
-import { arch, homedir, platform, release } from "node:os";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { arch, homedir, platform, release, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import { oneLine, silent, type Logger } from "./log.ts";
+import { message, oneLine, silent, type Logger } from "./log.ts";
 
 const OUTPUT_LIMIT = 200_000;
 const READ_LIMIT = 4 * 1024 * 1024;
 const LIST_LIMIT = 1000;
+/** Linux takes at most 128 KiB in one argument: a longer command line goes to bash as a script file. */
+const ARG_BYTES = 100_000;
 const WIN = process.platform === "win32";
+/** The end word of the here-documents Gemini is shown: not a line of any file. */
+const END_WORD = "GMB_EOF";
 
 /**
  * bash on the PATH, or in its usual places. Gemini is told to write bash, and a command a user copies from a
@@ -49,6 +53,12 @@ function bashVersion(): [number, number] {
 
 type Switches = { shell: boolean; files: boolean };
 
+/**
+ * write_file only where run_command cannot write a file: without the shell, or without bash (cmd.exe on Windows).
+ * With bash, a here-document writes it, and the file runs in the same call: one round instead of two.
+ */
+const writes = (tools: Switches) => tools.files && !(tools.shell && RUNS_BASH);
+
 /** What Gemini needs to know to write paths and commands: the kind of computer, the home folder, the shell. */
 export function systemNote(tools: Switches): string {
   const os = { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform() as string] ?? platform();
@@ -58,11 +68,15 @@ export function systemNote(tools: Switches): string {
     const [major, minor] = bashVersion();
     lines.push(
       `run_command runs its "command" with ${SHELL} -c${major ? ` (bash ${major}.${minor})` : ""}, so "command" must be bash syntax only: a command line as typed in a bash terminal. ` +
-        "Never put Python or the code of any other language into it.",
+        "Never run Python or the code of any other language as bash commands.",
+      `run_command also writes files: a here-document whose end word is in single quotes writes each line as it is ($, backticks, backslashes and quotes too) until a line that is only the end word; cat >> adds to the end of a file. ` +
+        "Code in another language goes into a file this way, and runs in the same command, for example:",
+      `mkdir -p /tmp/job && cat > /tmp/job/main.py <<'${END_WORD}' && python3 /tmp/job/main.py`,
+      'print("hello")',
+      END_WORD,
     );
     // macOS keeps bash 3.2: what came with bash 4 fails there
     if (major && major < 4) lines.push("This bash is older than 4: ${var^^} and ${var,,}, associative arrays (declare -A), mapfile, |& and ** do not work in it.");
-    if (tools.files) lines.push("To run code in another language, save it to a file with write_file first, then run that file with run_command (for example: python3 /tmp/script.py).");
   } else if (tools.shell) lines.push(`run_command uses ${SHELL}.`);
   return lines.join("\n");
 }
@@ -73,7 +87,7 @@ export function builtinTools(tools: Switches): Tool[] {
     list.push({
       name: "run_command",
       description: RUNS_BASH
-        ? `Run one bash command line on the user's computer (${SHELL} -c) and return its exit code and output. Bash syntax only: no Python or other code in it.`
+        ? `Run a bash command line on the user's computer (${SHELL} -c) and return its exit code and output. Bash syntax only: code of another language goes into a file with a here-document (cat > FILE <<'${END_WORD}'), which can run in the same command.`
         : `Run a command in the shell of the user's computer (${SHELL}) and return its exit code and output.`,
       inputSchema: {
         type: "object",
@@ -86,39 +100,39 @@ export function builtinTools(tools: Switches): Tool[] {
       },
     });
   if (tools.files)
-    list.push(
-      {
-        name: "read_file",
-        description: "Read a text file.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string" },
-            offset: { type: "integer", description: "First line to read, from 1." },
-            limit: { type: "integer", description: "Number of lines to read." },
-          },
-          required: ["path"],
+    list.push({
+      name: "read_file",
+      description: "Read a text file.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          offset: { type: "integer", description: "First line to read, from 1." },
+          limit: { type: "integer", description: "Number of lines to read." },
         },
+        required: ["path"],
       },
-      {
-        name: "write_file",
-        description: "Write a text file, replacing it, or add to its end. Missing folders are created.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            path: { type: "string" },
-            content: { type: "string" },
-            append: { type: "boolean", description: "Add to the end instead of replacing." },
-          },
-          required: ["path", "content"],
+    });
+  if (writes(tools))
+    list.push({
+      name: "write_file",
+      description: "Write a text file, replacing it, or add to its end. Missing folders are created.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+          append: { type: "boolean", description: "Add to the end instead of replacing." },
         },
+        required: ["path", "content"],
       },
-      {
-        name: "list_directory",
-        description: "List the files and folders in a folder.",
-        inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-      },
-    );
+    });
+  if (tools.files)
+    list.push({
+      name: "list_directory",
+      description: "List the files and folders in a folder.",
+      inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    });
   return list;
 }
 
@@ -259,9 +273,15 @@ async function runCommand(command: string, cwd: string | undefined, timeoutSec: 
   if (signal?.aborted) return text("Cancelled before it started.", true);
   const limitMs = Math.min(600, Math.max(1, timeoutSec)) * 1000;
   log.info(`running with ${SHELL} in ${dir}, time limit ${limitMs / 1000} s: ${oneLine(command, 200)}`);
+  const bytes = Buffer.byteLength(command);
+  const script = !WIN && bytes > ARG_BYTES ? join(await mkdtemp(join(tmpdir(), "gmb-command-")), "command.sh") : undefined;
+  if (script) {
+    log.info(`the command line has ${bytes} bytes, more than one argument may hold: it runs from ${script}`);
+    await writeFile(script, command, { mode: 0o600 });
+  }
   return new Promise((done) => {
     // cmd.exe /s /c strips the outer quotes: quoting the whole line keeps a quoted program path intact
-    const child = spawn(SHELL, WIN ? ["/d", "/s", "/c", `"${command}"`] : ["-c", command], {
+    const child = spawn(SHELL, WIN ? ["/d", "/s", "/c", `"${command}"`] : script ? [script] : ["-c", command], {
       cwd: dir,
       detached: !WIN,
       windowsHide: true,
@@ -291,6 +311,7 @@ async function runCommand(command: string, cwd: string | undefined, timeoutSec: 
       running.delete(child);
       child.stdout.destroy();
       child.stderr.destroy();
+      if (script) void rm(dirname(script), { recursive: true, force: true }).catch((e: unknown) => log.warn(`could not delete ${script}: ${message(e)}`));
       done(result);
     };
     const report = (code: number | null, sig: NodeJS.Signals | null) => {
