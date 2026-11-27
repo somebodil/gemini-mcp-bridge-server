@@ -80,7 +80,9 @@ async function main(): Promise<void> {
   // a mistake of the server's own is said at once; one request's failure never ends the server (http.ts)
   process.on("unhandledRejection", (e) => log.error(`unexpected failure: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`));
   process.on("uncaughtExceptionMonitor", (e) => log.error(`the server stops on an error of its own: ${e.stack ?? e.message}`));
-  const hub = new Hub({ ...config, tools }, log);
+  // the folder npx was started in: commands start there, and relative paths ($HOME stays the home folder)
+  const work = process.cwd();
+  const hub = new Hub({ ...config, tools }, log, work);
   // the port first: a second instance learns at once that it is taken
   const perfLog = perfLogPath(path);
   const http = await listen(hub, { port: listenPort, token: config.token, log, perfLog }).catch(async (e: NodeJS.ErrnoException) => {
@@ -112,6 +114,7 @@ async function main(): Promise<void> {
     `  Token:  ${token}`,
     `  Config: ${path}${created ? " (new)" : copied ? ` (copied from ${copied})` : ""}`,
     `  Perf:   ${perfLog} (when the extension's performance log is on)`,
+    `  Folder: ${work} (the working folder: commands start here, and relative paths)`,
     `  Tools:  ${names.length ? names.join(", ") : "none"}`,
     ...hub.notRunning().map((s) => `  Not running yet: ${s.name}${s.error ? ` (${s.error})` : " (starting)"}`),
     "",

@@ -144,12 +144,15 @@ export class Hub {
   private readonly note: string;
   private readonly upstreams: Upstream[];
   private readonly log: Logger;
+  /** The working folder: where commands start, and relative paths. */
+  private readonly work: string;
 
-  constructor(config: Config, log: Logger = silent) {
+  constructor(config: Config, log: Logger = silent, work = process.cwd()) {
     this.log = log;
+    this.work = work;
     this.builtin = builtinTools(config.tools);
     this.builtinNames = new Set(this.builtin.map((t) => t.name));
-    this.note = systemNote(config.tools);
+    this.note = systemNote(config.tools, work);
     this.upstreams = Object.entries(config.mcpServers)
       .filter(([, c]) => !c.disabled)
       .map(([name, c]) => new Upstream(name, c, log));
@@ -224,7 +227,7 @@ export class Hub {
   }
 
   private async route(name: string, args: Record<string, unknown>, signal: AbortSignal | undefined, log: Logger): Promise<CallToolResult> {
-    if (this.builtinNames.has(name)) return await callBuiltin(name, args, signal, log);
+    if (this.builtinNames.has(name)) return await callBuiltin(name, args, this.work, signal, log);
     // by the exact exposed name: server names may contain the separator too
     const p = this.passThrough().find((x) => x.name === name);
     if (!p) throw new Error(`Unknown tool: ${name}`);

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { request, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -90,9 +90,9 @@ describe("tools", () => {
     const c = await connect();
     assert.equal(c.getServerVersion()?.name, "local-mcp-bridge-server");
     assert.equal(c.getServerVersion()?.version, VERSION);
-    assert.match(c.getInstructions() ?? "", /Home folder: .*Relative paths in the tools start there/);
-    // a cd in one call is gone in the next: Gemini is told, or it runs "cd dir" alone and then works in the home folder
-    assert.match(c.getInstructions() ?? "", /Each run_command starts a new shell in the home folder \(or in "cwd"\): a cd does not carry over to the next call\./);
+    assert.match(c.getInstructions() ?? "", /Home folder: .+\.\nWorking folder: .+\. Relative paths in the tools start there; ~ is the home folder\./);
+    // a cd in one call is gone in the next: Gemini is told, or it runs "cd dir" alone and then works in the working folder
+    assert.match(c.getInstructions() ?? "", /Each run_command starts a new shell in the working folder \(or in "cwd"\): a cd does not carry over to the next call\./);
     if (WIN) assert.match(c.getInstructions() ?? "", /run_command uses /);
     else {
       // Gemini puts Python into "command" unless it is told plainly not to
@@ -166,6 +166,30 @@ describe("tools", () => {
     const timedOut = lines.at(-1) ?? "";
     assert.match(timedOut, /^ERROR run_command failed \(\d+ ms\): Stopped after 1 s/);
     assert.ok(timedOut.length < 600, "cut short, on one line");
+  });
+
+  it("starts commands and relative paths in the working folder; ~ and $HOME stay the home folder", async () => {
+    mkdirSync(join(dir, "work", "sub"), { recursive: true });
+    // the real path: a command's cwd comes back resolved (/var is a link to /private/var on macOS)
+    const work = realpathSync(join(dir, "work"));
+    writeFileSync(join(work, "sub", "a.txt"), "in the project\n");
+    const h = new Hub(config({ mcpServers: {} }), undefined, work);
+    const note = h.instructions();
+    assert.ok(note.includes(`\nWorking folder: ${work}. Relative paths in the tools start there`), note);
+    assert.equal(textOf(await h.callTool("read_file", { path: "sub/a.txt" })), "in the project\n");
+    assert.match(textOf(await h.callTool("list_directory", { path: "." })), /\[DIR\] {2}sub\//);
+    const home = textOf(await h.callTool("list_directory", { path: "~" }));
+    assert.ok(home.startsWith(`${homedir()}\n`), home);
+    const where = async (cwd?: string) => textOf(await h.callTool("run_command", { command: node("console.log(process.cwd() + ':' + require('os').homedir())"), cwd }));
+    const here = await where();
+    assert.ok(here.includes(`\n${work}:${homedir()}`), here);
+    const sub = await where("sub");
+    assert.ok(sub.includes(`\n${join(work, "sub")}:`), sub);
+    // gone while the server runs: said as such, not as a shell that could not start
+    rmSync(work, { recursive: true });
+    const gone = await h.callTool("run_command", { command: "echo hi" });
+    assert.equal(gone.isError, true);
+    assert.equal(textOf(gone), `The folder ${work} does not exist.`);
   });
 
   it("reads, writes and lists files", async () => {
@@ -724,7 +748,9 @@ describe("command line", () => {
 
   it("serves on the given port without saving it, also with a new token", async () => {
     const before = JSON.parse(readFileSync(path, "utf8")) as { port: number; token: string };
-    const p = spawn(process.execPath, [CLI, "--config", path, "--port", "47123", "--new-token"]);
+    // started in a folder of its own: that is its working folder
+    const work = realpathSync(join(dir, "cli"));
+    const p = spawn(process.execPath, [CLI, "--config", path, "--port", "47123", "--new-token"], { cwd: work });
     const out = await new Promise<string>((resolve) => {
       let s = "";
       p.stdout.on("data", (c: Buffer) => {
@@ -736,6 +762,7 @@ describe("command line", () => {
     await new Promise((r) => p.on("close", r));
     assert.match(out, /URL: {4}http:\/\/127\.0\.0\.1:47123\/mcp/);
     assert.match(out, /Token: {2}\(not printed here; run: local-mcp-bridge-server token\)/, "no terminal: no token");
+    assert.ok(out.includes(`Folder: ${work} (the working folder`), out);
     const after = JSON.parse(readFileSync(path, "utf8")) as { port: number; token: string };
     assert.equal(after.port, before.port);
     assert.notEqual(after.token, before.token);

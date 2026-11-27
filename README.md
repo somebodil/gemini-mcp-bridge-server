@@ -5,17 +5,18 @@ The local MCP server for [Gemini MCP Bridge](https://github.com/somebodil/gemini
 The extension runs in Chrome and cannot touch your computer by itself. This server is the part that can: it runs commands, reads and writes files, and passes calls through to the other MCP servers you list. The extension reaches it at `http://127.0.0.1:7341/mcp`, or at the address of the computer the server runs on.
 
 ```bash
-npx local-mcp-bridge-server
+cd myproject && npx local-mcp-bridge-server
 ```
 
-Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
+The folder you start it in is its working folder: commands start there, and relative paths (below). Node.js 20 or later. The first start creates the config file with a random token, then prints what to enter in the extension's options:
 
 ```
-local-mcp-bridge-server 0.8.1
+local-mcp-bridge-server 0.9.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
   Perf:   /home/you/.config/local-mcp-bridge-server/perf.log (when the extension's performance log is on)
+  Folder: /home/you/myproject (the working folder: commands start here, and relative paths)
   Tools:  run_command, read_file, list_directory
 ```
 
@@ -41,7 +42,7 @@ npm uninstall -g gemini-mcp-bridge-server            # if you had installed it
 | `list_directory` | Lists a folder (at most 1000 entries); links show as what they point to. |
 | `write_file` | Only where `run_command` cannot write a file: without bash (`cmd.exe` on Windows) and with `--no-shell`. Writes a text file, or adds to its end. Missing folders are created. |
 
-Paths may be absolute, start with `~`, or be relative to your home folder. The server also tells Gemini, in its MCP instructions, your operating system, your home folder and your shell, so that Gemini writes paths and commands that work, and that each `run_command` starts anew in the home folder (a `cd` does not carry over to the next call).
+Paths may be absolute, start with `~` (your home folder), or be relative to the working folder, the folder the server was started in. Only the starting folder changes: `$HOME` and `~` stay your home folder. The server also tells Gemini, in its MCP instructions, your operating system, your home folder, the working folder and your shell, so that Gemini writes paths and commands that work, and that each `run_command` starts anew in the working folder (a `cd` does not carry over to the next call). To work in another folder, start the server there: the extension tells the AI with a message soon after (it asks the server again once its list is half a minute old, or at once with its **Refresh**). The extension tells the AI of a learned chat page where its own instructions and skills are, in your home folder and in the working folder: see [Its own folder](https://github.com/somebodil/gemini-mcp-bridge#its-own-folder-learn-the-page-once).
 
 ## Options
 

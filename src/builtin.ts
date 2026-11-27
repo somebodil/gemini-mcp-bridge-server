@@ -61,13 +61,16 @@ const writes = (tools: Switches) => tools.files && !(tools.shell && RUNS_BASH);
 
 /** Every call is a process of its own: a cd made in one is gone in the next. */
 const NEW_SHELL =
-  'Each run_command starts a new shell in the home folder (or in "cwd"): a cd does not carry over to the next call. Pass "cwd", or put the cd in the same command (cd myproject && npm test).';
+  'Each run_command starts a new shell in the working folder (or in "cwd"): a cd does not carry over to the next call. Pass "cwd", or put the cd in the same command (cd src && npm test).';
 
-/** What Gemini needs to know to write paths and commands: the kind of computer, the home folder, the shell. */
-export function systemNote(tools: Switches): string {
+/**
+ * What Gemini needs to know to write paths and commands: the kind of computer, the home folder, the working
+ * folder (where the server was started), the shell.
+ */
+export function systemNote(tools: Switches, work: string): string {
   const os = { darwin: "macOS", win32: "Windows", linux: "Linux" }[platform() as string] ?? platform();
   const lines = [`Computer: ${os} ${release()} (${arch()}).`, `Home folder: ${homedir()}.`];
-  if (tools.files || tools.shell) lines[1] += " Relative paths in the tools start there; ~ works too.";
+  if (tools.files || tools.shell) lines.push(`Working folder: ${work}. Relative paths in the tools start there; ~ is the home folder.`);
   if (tools.shell && RUNS_BASH) {
     const [major, minor] = bashVersion();
     lines.push(
@@ -98,7 +101,7 @@ export function builtinTools(tools: Switches): Tool[] {
         type: "object",
         properties: {
           command: { type: "string", description: RUNS_BASH ? "The command line, in bash syntax only." : "The command line." },
-          cwd: { type: "string", description: "Folder to run in. Default: the home folder." },
+          cwd: { type: "string", description: "Folder to run in. Default: the working folder." },
           timeout_seconds: { type: "number", description: "Stop the command after this long. Default 60, at most 600." },
         },
         required: ["command"],
@@ -141,11 +144,12 @@ export function builtinTools(tools: Switches): Tool[] {
   return list;
 }
 
-function resolvePath(p: string): string {
+/** ~ is the home folder; a relative path starts in the working folder. */
+function resolvePath(p: string, work: string): string {
   const s = p.trim();
   if (s === "~") return homedir();
   if (s.startsWith("~/") || s.startsWith("~\\")) return join(homedir(), s.slice(2));
-  return isAbsolute(s) ? s : resolve(homedir(), s);
+  return isAbsolute(s) ? s : resolve(work, s);
 }
 
 const text = (t: string, isError = false): CallToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
@@ -175,23 +179,23 @@ function int(v: unknown): number | undefined {
 }
 
 /**
- * Runs a built-in tool; `name` is one of builtinTools(). Wrong arguments come back as an error result. Each step
- * is said in `log` before it is taken, so that a step that hangs is the last one there.
+ * Runs a built-in tool; `name` is one of builtinTools(), `work` the working folder. Wrong arguments come back as
+ * an error result. Each step is said in `log` before it is taken, so that a step that hangs is the last one there.
  */
-export async function callBuiltin(name: string, args: Record<string, unknown>, signal?: AbortSignal, log: Logger = silent): Promise<CallToolResult> {
+export async function callBuiltin(name: string, args: Record<string, unknown>, work: string, signal?: AbortSignal, log: Logger = silent): Promise<CallToolResult> {
   try {
     switch (name) {
       case "run_command":
-        return await runCommand(required(args, "command"), optional(args, "cwd"), int(args.timeout_seconds) ?? 60, signal, log);
+        return await runCommand(required(args, "command"), resolvePath(optional(args, "cwd") ?? ".", work), int(args.timeout_seconds) ?? 60, signal, log);
       case "read_file": {
-        const path = resolvePath(required(args, "path"));
+        const path = resolvePath(required(args, "path"), work);
         const offset = int(args.offset);
         const limit = int(args.limit);
         log.info(`reading ${path}${offset !== undefined || limit !== undefined ? ` (offset ${offset ?? 1}, limit ${limit ?? "none"})` : ""}`);
         return await readText(path, offset, limit);
       }
       case "write_file": {
-        const path = resolvePath(required(args, "path"));
+        const path = resolvePath(required(args, "path"), work);
         const content = required(args, "content");
         const bytes = Buffer.byteLength(content);
         log.info(`creating the folders of ${path} if missing`);
@@ -201,7 +205,7 @@ export async function callBuiltin(name: string, args: Record<string, unknown>, s
         return text(`${args.append === true ? "Added" : "Wrote"} ${bytes} bytes to ${path}.`);
       }
       case "list_directory": {
-        const path = resolvePath(required(args, "path"));
+        const path = resolvePath(required(args, "path"), work);
         log.info(`listing ${path}`);
         return await listDirectory(path);
       }
@@ -272,9 +276,9 @@ export function stopAllCommands(): void {
  * Runs one command line. The result is ready when the shell exits, not when every process holding its output
  * does: a command may leave something running in the background (`server &`), which must not hold the answer.
  */
-async function runCommand(command: string, cwd: string | undefined, timeoutSec: number, signal: AbortSignal | undefined, log: Logger): Promise<CallToolResult> {
-  const dir = cwd ? resolvePath(cwd) : homedir();
-  if (cwd && !(await stat(dir).catch(() => null))?.isDirectory()) return text(`The folder ${dir} does not exist.`, true);
+async function runCommand(command: string, dir: string, timeoutSec: number, signal: AbortSignal | undefined, log: Logger): Promise<CallToolResult> {
+  // the working folder too may be gone (deleted while the server runs)
+  if (!(await stat(dir).catch(() => null))?.isDirectory()) return text(`The folder ${dir} does not exist.`, true);
   if (signal?.aborted) return text("Cancelled before it started.", true);
   const limitMs = Math.min(600, Math.max(1, timeoutSec)) * 1000;
   log.info(`running with ${SHELL} in ${dir}, time limit ${limitMs / 1000} s: ${oneLine(command, 200)}`);
